@@ -23,8 +23,8 @@ raw-window-handle = "0.6"
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
 
 [profile.release]
-opt-level = 3
-lto = "fat"
+opt-level = "z"
+lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
