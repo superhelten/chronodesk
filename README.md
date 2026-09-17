@@ -26,8 +26,24 @@ Requires Rust 1.95+ (eframe 0.36).
 While locked the overlay ignores the mouse entirely, so the tray icon is the way back.
 Locking is disabled if the tray icon could not be created, and the app always starts unlocked.
 
+## Configuration
+
 Settings (mode, timer length, size, backdrop, chroma, seconds, always-on-top) and the window
-position are saved to `%APPDATA%\chronodesk\data\app.ron`.
+position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
+on macOS), about 1.5 s after the last change and again on exit. The file is meant to be
+readable and hand-editable.
+
+The app owns this file rather than using eframe's persistence, to get two properties:
+
+- **Atomic writes.** Saving writes `app.ron.tmp`, flushes it, then renames it over `app.ron`,
+  so an interrupted write can never leave a truncated file.
+- **Per-field tolerance.** The file is parsed untyped first and each field converted on its
+  own, so one bad value falls back to its default while everything else — including the window
+  position — is kept. Repairs are written back and reported on stderr.
+
+Only a file that cannot be parsed at all, or one written by a newer `schema_version`, is
+rejected; it is copied to `app.ron.bak` first. Files from the older eframe layout are migrated
+automatically.
 
 ## Layout
 

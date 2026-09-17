@@ -11,11 +11,11 @@ license = "MIT"
 eframe = { version = "0.36.2", default-features = false, features = [
     "default_fonts",
     "glow",
-    "persistence",
 ] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 tray-icon = "0.25.1"
 serde = { version = "1", features = ["derive"] }
+ron = "0.12"
 raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]

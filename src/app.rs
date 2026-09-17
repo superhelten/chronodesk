@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -8,6 +9,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::config::{self, Config};
 use crate::timer::{self, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
 
@@ -24,7 +26,7 @@ const BLINK_FOR: Duration = Duration::from_secs(30);
 /// until it passes, so aim well past it; a 25 ms display lag is invisible.
 const WAKE_SLACK: Duration = Duration::from_millis(25);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     #[default]
     Clock,
@@ -34,6 +36,10 @@ pub enum Mode {
 
 impl Mode {
     pub const ALL: [Self; 3] = [Self::Clock, Self::Stopwatch, Self::Timer];
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.id().eq_ignore_ascii_case(id))
+    }
 
     pub fn id(self) -> &'static str {
         match self {
@@ -52,7 +58,7 @@ impl Mode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Size {
     Small,
     #[default]
@@ -62,6 +68,10 @@ pub enum Size {
 
 impl Size {
     pub const ALL: [Self; 3] = [Self::Small, Self::Medium, Self::Large];
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.id().eq_ignore_ascii_case(id))
+    }
 
     pub fn id(self) -> &'static str {
         match self {
@@ -88,36 +98,39 @@ impl Size {
     }
 }
 
-/// Persisted between runs. `locked` is deliberately not stored: the app always
-/// starts interactive so it can never come up unreachable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-struct Settings {
-    mode: Mode,
-    timer_minutes: u64,
-    size: Size,
-    backdrop: bool,
-    chroma: bool,
-    show_seconds: bool,
-    always_on_top: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            mode: Mode::Clock,
-            timer_minutes: 25,
-            size: Size::Medium,
-            backdrop: false,
-            chroma: false,
-            show_seconds: true,
-            always_on_top: true,
+// Stored as their lowercase ids rather than variant names: RON drops the name
+// of a unit variant when a value is read untyped, which is exactly what the
+// field-by-field config loader does.
+macro_rules! serde_by_id {
+    ($ty:ty, $what:literal) => {
+        impl Serialize for $ty {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.id())
+            }
         }
-    }
-}
 
+        impl<'de> Deserialize<'de> for $ty {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                let id = String::deserialize(deserializer)?;
+                Self::from_id(&id)
+                    .ok_or_else(|| serde::de::Error::custom(format!("unknown {} '{id}'", $what)))
+            }
+        }
+    };
+}
+serde_by_id!(Mode, "mode");
+serde_by_id!(Size, "size");
+
+/// Runtime state. `locked` is deliberately never persisted: the app always
+/// starts interactive so it can never come up unreachable.
 pub struct ChronoApp {
-    settings: Settings,
+    settings: Config,
+    /// Last state written to disk, so saving only happens on real changes.
+    saved: Config,
+    config_path: Option<PathBuf>,
+    /// Set when `settings` differs from `saved`; writes are delayed so dragging
+    /// the window doesn't hit the disk on every frame.
+    dirty_since: Option<Instant>,
     locked: bool,
     stopwatch: Stopwatch,
     countdown: Countdown,
@@ -128,10 +141,24 @@ pub struct ChronoApp {
     wheel: f32,
 }
 
+/// How long to wait after the last change before writing the config file.
+const SAVE_DELAY: Duration = Duration::from_millis(1500);
+
 impl ChronoApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let settings: Settings =
-            cc.storage.and_then(|s| eframe::get_value(s, eframe::APP_KEY)).unwrap_or_default();
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        loaded: config::Loaded,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        for warning in &loaded.warnings {
+            eprintln!("ChronoDesk: config: {warning}");
+        }
+        if let Some(backup) = &loaded.quarantined {
+            eprintln!("ChronoDesk: unusable config quarantined at {}", backup.display());
+        }
+        // Anything the loader had to repair is written back, so a bad value is
+        // cleaned up instead of being re-reported on every launch.
+        let repaired = !loaded.warnings.is_empty() || loaded.quarantined.is_some() || loaded.migrated;
+        let settings = loaded.config;
 
         install_display_font(&cc.egui_ctx);
         if !settings.always_on_top {
@@ -140,7 +167,10 @@ impl ChronoApp {
 
         Ok(Self {
             countdown: Countdown::new(minutes(settings.timer_minutes)),
+            saved: settings.clone(),
             settings,
+            config_path: config::config_path(),
+            dirty_since: repaired.then(Instant::now),
             locked: false,
             stopwatch: Stopwatch::default(),
             tray: Tray::new(&cc.egui_ctx),
@@ -148,6 +178,37 @@ impl ChronoApp {
             window_styled: false,
             wheel: 0.0,
         })
+    }
+
+    /// Notes the current window position and writes the config once it has been
+    /// unchanged for [`SAVE_DELAY`].
+    fn persist(&mut self, ctx: &egui::Context, now: Instant) {
+        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+            let pos = config::WindowPos { x: rect.min.x, y: rect.min.y };
+            if self.settings.window != Some(pos) {
+                self.settings.window = Some(pos);
+            }
+        }
+
+        if self.settings != self.saved && self.dirty_since.is_none() {
+            self.dirty_since = Some(now);
+        }
+        if let Some(since) = self.dirty_since {
+            if now.duration_since(since) >= SAVE_DELAY {
+                self.write_config();
+            } else {
+                ctx.request_repaint_after(SAVE_DELAY);
+            }
+        }
+    }
+
+    fn write_config(&mut self) {
+        self.dirty_since = None;
+        let Some(path) = &self.config_path else { return };
+        match config::save(path, &self.settings) {
+            Ok(()) => self.saved = self.settings.clone(),
+            Err(err) => eprintln!("ChronoDesk: could not save config: {err}"),
+        }
     }
 
     fn apply(&mut self, cmd: Command, ctx: &egui::Context, now: Instant) {
@@ -404,6 +465,7 @@ impl eframe::App for ChronoApp {
 
         let state = self.menu_state(now);
         self.tray.sync(state);
+        self.persist(&ctx, now);
 
         // Schedule from the readout actually drawn: sampling the clock again here
         // could straddle a boundary and leave a stale value up for a full period.
@@ -421,8 +483,10 @@ impl eframe::App for ChronoApp {
         if self.settings.chroma { CHROMA.to_normalized_gamma_f32() } else { [0.0; 4] }
     }
 
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, eframe::APP_KEY, &self.settings);
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.settings != self.saved {
+            self.write_config();
+        }
     }
 
     fn persist_egui_memory(&self) -> bool {
