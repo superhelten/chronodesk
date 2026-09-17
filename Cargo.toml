@@ -1,0 +1,30 @@
+[package]
+name = "chronodesk"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Minimalist transparent desktop overlay clock, stopwatch and timer"
+license = "MIT"
+
+[dependencies]
+# glow instead of wgpu: much smaller binary and far lower RAM for a tiny overlay.
+eframe = { version = "0.36.2", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "persistence",
+] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+tray-icon = "0.25.1"
+serde = { version = "1", features = ["derive"] }
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+# Same version/features eframe already builds; only used to hide the Win11 DWM border.
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

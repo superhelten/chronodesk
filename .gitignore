@@ -1,0 +1,5 @@
+/target
+
+# Local runtime state (eframe persistence)
+/data
+app.ron
