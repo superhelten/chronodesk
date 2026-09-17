@@ -3,6 +3,7 @@
 mod app;
 mod config;
 mod icon;
+mod instrument;
 mod layout;
 mod theme;
 mod timer;

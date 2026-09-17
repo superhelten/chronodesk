@@ -10,6 +10,7 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
+use crate::instrument::{Cause, Instrument};
 use crate::layout::{self, DerivedLayout, Glyphs, LayoutKey, Metrics};
 use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
@@ -132,6 +133,7 @@ pub struct ChronoApp {
     stopwatch: Stopwatch,
     countdown: Countdown,
     tray: Tray,
+    instrument: Instrument,
     theme: Theme,
     /// Cached layout: rebuilt on size or scale changes, not per frame.
     layout: DerivedLayout,
@@ -174,6 +176,7 @@ impl ChronoApp {
             locked: false,
             stopwatch: Stopwatch::default(),
             tray: Tray::new(&cc.egui_ctx),
+            instrument: Instrument::start(&cc.egui_ctx),
             layout: DerivedLayout::new(&Theme::default()),
             theme: Theme::default(),
             window_size: None,
@@ -395,18 +398,27 @@ struct Readout {
 }
 
 impl eframe::App for ChronoApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Synthetic pointer events go in here so hit-testing, hovering and
+        // clicking take exactly the same path as a real mouse.
+        self.instrument.inject(raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let frame_start = Instant::now();
         let ctx = ui.ctx().clone();
-        let now = Instant::now();
+        let now = frame_start;
         if !self.window_styled {
             self.window_styled = true;
             strip_window_chrome(frame);
         }
 
         let mut commands: Vec<Command> = self.tray.commands().collect();
+        commands.extend(self.instrument.commands());
         if !self.locked {
             commands.extend(self.keyboard_commands(&ctx));
         }
+        let had_commands = !commands.is_empty();
         for cmd in commands {
             self.apply(cmd, &ctx, now);
         }
@@ -502,6 +514,21 @@ impl eframe::App for ChronoApp {
         if let Some(next) = readout.next_change {
             ctx.request_repaint_after(next + WAKE_SLACK);
         }
+
+        if self.instrument.click_pending() {
+            // Keep drawing until the synthetic release has been delivered.
+            ctx.request_repaint();
+        }
+        let cause = if had_commands {
+            Cause::Config
+        } else if ctx.input(|i| !i.events.is_empty()) {
+            Cause::Input
+        } else if readout.next_change.is_some() {
+            Cause::Tick
+        } else {
+            Cause::Other
+        };
+        self.instrument.record_frame(frame_start.elapsed(), cause);
 
         // Last: this blocks in a native modal loop until the menu closes.
         if background.secondary_clicked() {

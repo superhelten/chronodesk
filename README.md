@@ -46,6 +46,28 @@ Only a file that cannot be parsed at all, or one written by a newer `schema_vers
 rejected; it is copied to `app.ron.bak` first. Files from the older eframe layout are migrated
 automatically.
 
+## Test instrumentation
+
+Driving the overlay with a real mouse is unreliable — the pointer belongs to whoever is using the
+machine, and since the window is transparent a screenshot of it also captures whatever moves
+behind it. So the app can be driven from inside instead:
+
+```sh
+cargo build --release --features instrument
+target/release/chronodesk --instrument     # prints its port, also written to %TEMP%\chronodesk-instrument.port
+powershell -File scripts/instrument-test.ps1
+```
+
+With the feature *and* the flag, the app listens on a loopback port and takes line commands:
+`cmd <menu-id>` (the same ids the menus use), `hover <x> <y>` / `hover off`, `click <x> <y>`,
+`stats` / `stats reset`, `quit`. Synthetic pointer events are injected into egui's raw input, so
+hovering and clicking take the same path as a real mouse.
+
+`stats` reports frames, fps, mean/max time of the app's `ui()` pass, the gap between frames and a
+breakdown of why each frame was drawn (`tick`, `input`, `config`, `other`).
+
+Without the feature the flag only prints a notice: there is no listener, no thread and no timers.
+
 ## Layout
 
 - `src/main.rs` – window setup (transparent, borderless, always-on-top, hidden from taskbar)

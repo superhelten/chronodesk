@@ -6,6 +6,10 @@ rust-version = "1.95"
 description = "Minimalist transparent desktop overlay clock, stopwatch and timer"
 license = "MIT"
 
+[features]
+# Test-only: loopback command channel and frame telemetry. Never in a release build.
+instrument = []
+
 [dependencies]
 # glow instead of wgpu: much smaller binary and far lower RAM for a tiny overlay.
 eframe = { version = "0.36.2", default-features = false, features = [
