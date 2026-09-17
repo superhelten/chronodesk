@@ -32,7 +32,8 @@ Locking is disabled if the tray icon could not be created, and the app always st
 Settings (mode, timer length, size, backdrop, chroma, seconds, always-on-top) and the window
 position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
 on macOS), about 1.5 s after the last change and again on exit. The file is meant to be
-readable and hand-editable.
+readable and hand-editable. Setting `CHRONODESK_CONFIG` to a path names the file outright,
+which is how the test scripts stay out of the config you actually use.
 
 The app owns this file rather than using eframe's persistence, to get two properties:
 
@@ -45,6 +46,26 @@ The app owns this file rather than using eframe's persistence, to get two proper
 Only a file that cannot be parsed at all, or one written by a newer `schema_version`, is
 rejected; it is copied to `app.ron.bak` first. Files from the older eframe layout are migrated
 automatically.
+
+### Window placement
+
+A saved position only means something against the monitors attached right now, so it is checked
+at startup, once the overlay's real size is known:
+
+- **Nothing visible on any monitor** — typically the screen it lived on has been unplugged —
+  and it goes to the top-right of the primary monitor, inset by 24 pt.
+- **Visible but hanging over the taskbar or a screen edge**, and it is nudged back inside that
+  monitor's work area, as close to where you left it as possible.
+- Otherwise it is left alone, including on a secondary monitor or one at negative coordinates.
+
+The new position is written back to `app.ron` immediately, so the next launch starts from a place
+that exists. Windows would clamp such a window on-screen by itself; this decides *where* instead
+of accepting whatever corner that lands in.
+
+The margin is in points and scaled by the target monitor's DPI factor, and the work area comes
+from the OS with the taskbar already excluded in pixels, so the overlay clears the tray at 100 %,
+150 % or any other scaling. The arithmetic is done in physical pixels throughout — the only
+space in which several monitors at different scalings share one coordinate system.
 
 ## Test instrumentation
 
@@ -60,11 +81,23 @@ powershell -File scripts/instrument-test.ps1
 
 With the feature *and* the flag, the app listens on a loopback port and takes line commands:
 `cmd <menu-id>` (the same ids the menus use), `hover <x> <y>` / `hover off`, `click <x> <y>`,
-`stats` / `stats reset`, `quit`. Synthetic pointer events are injected into egui's raw input, so
+`place <x> <y>` / `placement`, `stats` / `stats reset`, `quit`. Synthetic pointer events are injected into egui's raw input, so
 hovering and clicking take the same path as a real mouse.
 
 `stats` reports frames, fps, mean/max time of the app's `ui()` pass, the gap between frames and a
 breakdown of why each frame was drawn (`tick`, `input`, `config`, `other`).
+
+`place` re-runs the placement check with a synthetic saved position, as if it had just been read
+from the config file, and `placement` reports what was decided and against which monitors — so a
+position left behind by a disconnected screen is reproducible without unplugging one:
+
+```sh
+powershell -File scripts/placement-test.ps1
+```
+
+That script seeds a scratch `app.ron` with a position outside every screen, points the app at it
+with `CHRONODESK_CONFIG`, and checks the overlay against the work area it reads from Windows
+itself rather than against the app's own numbers.
 
 Without the feature the flag only prints a notice: there is no listener, no thread and no timers.
 
@@ -75,6 +108,7 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/theme.rs` – visual tokens: colours, alphas and proportions
 - `src/layout.rs` – derived state: metrics and glyph measurements, rebuilt only when the size or display scale changes
 - `src/config.rs` – the config file: atomic saves, field-tolerant loading
+- `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`
 - `src/timer.rs` – pure stopwatch/countdown logic and formatting (unit-tested)
 - `src/icon.rs` – procedurally drawn clock icon (no asset files)

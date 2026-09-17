@@ -5,6 +5,7 @@ mod config;
 mod icon;
 mod instrument;
 mod layout;
+mod placement;
 mod theme;
 mod timer;
 mod tray;

@@ -23,8 +23,13 @@ ron = "0.12"
 raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
-# Same version/features eframe already builds; only used to hide the Win11 DWM border.
+# Same version/features eframe already builds; used to hide the Win11 DWM border
+# and to enumerate the attached monitors.
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
+# Only for the per-monitor work area (the screen minus the taskbar), which winit
+# does not expose. Pinned to the version winit already builds, so no extra crate
+# is compiled and `HMONITOR` is the same type on both sides.
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
 
 [profile.release]
 opt-level = "z"

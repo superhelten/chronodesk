@@ -98,10 +98,19 @@ pub struct Loaded {
     pub migrated: bool,
 }
 
+/// Names a config file outright, bypassing the platform location. Used by the
+/// test harness so a run can be driven against a scratch file instead of the
+/// one the user is actually living with.
+pub const CONFIG_ENV: &str = "CHRONODESK_CONFIG";
+
 /// `%APPDATA%\chronodesk\data\app.ron` and the equivalent elsewhere — the same
 /// location eframe's own persistence used, so existing files are picked up.
 pub fn config_path() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
+    config_path_from(std::env::var_os(CONFIG_ENV), platform_dir())
+}
+
+fn platform_dir() -> Option<PathBuf> {
+    Some(if cfg!(windows) {
         PathBuf::from(std::env::var_os("APPDATA")?)
     } else if cfg!(target_os = "macos") {
         PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support")
@@ -109,8 +118,14 @@ pub fn config_path() -> Option<PathBuf> {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"))
-    };
-    Some(base.join("chronodesk").join("data").join("app.ron"))
+    })
+}
+
+fn config_path_from(overridden: Option<std::ffi::OsString>, base: Option<PathBuf>) -> Option<PathBuf> {
+    match overridden {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        _ => Some(base?.join("chronodesk").join("data").join("app.ron")),
+    }
 }
 
 pub fn load(path: &Path) -> Loaded {
@@ -527,6 +542,24 @@ mod tests {
         let loaded = load(&path);
         assert_eq!(loaded.config.timer_minutes, MAX_TIMER_MINUTES);
         assert!(loaded.warnings[0].contains("timer_minutes"), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn an_override_names_the_config_file_outright() {
+        let wanted = std::env::temp_dir().join("elsewhere").join("custom.ron");
+        let path = config_path_from(Some(wanted.clone().into_os_string()), Some(PathBuf::from("/base")));
+        assert_eq!(path, Some(wanted), "the override must win over the platform location");
+    }
+
+    #[test]
+    fn an_empty_override_falls_back_to_the_platform_location() {
+        let path = config_path_from(Some(std::ffi::OsString::new()), Some(PathBuf::from("/base")));
+        assert_eq!(path, Some(PathBuf::from("/base").join("chronodesk").join("data").join("app.ron")));
+    }
+
+    #[test]
+    fn without_a_base_directory_there_is_no_config_path() {
+        assert_eq!(config_path_from(None, None), None);
     }
 
     #[test]

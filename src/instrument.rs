@@ -106,6 +106,11 @@ mod imp {
         hover_dirty: bool,
         /// Queued synthetic clicks: press one frame, release the next.
         click: Option<ClickPhase>,
+        /// A synthetic "saved position", in points, for re-running the startup
+        /// placement check against the real monitors without restarting.
+        place: Option<Pos2>,
+        /// What the last placement check decided, read back by `placement`.
+        placement: String,
         telemetry: Telemetry,
         window_start: Option<Instant>,
     }
@@ -210,6 +215,18 @@ mod imp {
             let mut shared = shared.lock().expect("instrument lock");
             shared.telemetry.record_at(Instant::now(), elapsed, cause);
         }
+
+        /// A position to re-run the placement check with, as if it had just been
+        /// read from the config file.
+        pub fn take_place_request(&self) -> Option<Pos2> {
+            let shared = self.shared.as_ref()?;
+            shared.lock().expect("instrument lock").place.take()
+        }
+
+        pub fn set_placement_report(&self, report: String) {
+            let Some(shared) = &self.shared else { return };
+            shared.lock().expect("instrument lock").placement = report;
+        }
     }
 
     fn serve(stream: TcpStream, shared: &Arc<Mutex<Shared>>, ctx: &egui::Context) {
@@ -267,6 +284,25 @@ mod imp {
                 },
                 _ => "err usage: click <x> <y>".to_owned(),
             },
+            // Synthetic positioning: pretend the config held this position and
+            // let the real evaluator judge it against the real monitors.
+            "place" => match (parts.next(), parts.next()) {
+                (Some(x), Some(y)) => match (x.parse::<f32>(), y.parse::<f32>()) {
+                    (Ok(x), Ok(y)) => {
+                        shared.place = Some(pos2(x, y));
+                        "ok".to_owned()
+                    }
+                    _ => "err coordinates".to_owned(),
+                },
+                _ => "err usage: place <x> <y>".to_owned(),
+            },
+            "placement" => {
+                if shared.placement.is_empty() {
+                    "err not evaluated yet".to_owned()
+                } else {
+                    shared.placement.clone()
+                }
+            }
             "stats" => {
                 let window = shared.window_start.map(|t| t.elapsed()).unwrap_or_default();
                 if parts.next() == Some("reset") {
@@ -290,7 +326,7 @@ mod imp {
 mod imp {
     use std::time::Duration;
 
-    use eframe::egui::{self, RawInput};
+    use eframe::egui::{self, Pos2, RawInput};
 
     use super::Cause;
     use crate::tray::Command;
@@ -317,6 +353,12 @@ mod imp {
         }
 
         pub fn record_frame(&self, _elapsed: Duration, _cause: Cause) {}
+
+        pub fn take_place_request(&self) -> Option<Pos2> {
+            None
+        }
+
+        pub fn set_placement_report(&self, _report: String) {}
     }
 }
 

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{self, Config};
 use crate::instrument::{Cause, Instrument};
 use crate::layout::{self, DerivedLayout, Glyphs, LayoutKey, Metrics};
+use crate::placement;
 use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
@@ -23,6 +24,14 @@ const BLINK_FOR: Duration = Duration::from_secs(30);
 /// early. Waking just before a boundary would find "1 ms left" and spin at vsync
 /// until it passes, so aim well past it; a 25 ms display lag is invisible.
 const WAKE_SLACK: Duration = Duration::from_millis(25);
+/// How long to wait for a window move to take effect before trusting the
+/// window's own reported position again.
+const PLACEMENT_TIMEOUT: Duration = Duration::from_millis(1500);
+/// A move is expressed in points and applied in whole pixels, so the window
+/// lands within rounding distance of where it was asked to go.
+const ARRIVAL_TOLERANCE_PX: f32 = 2.0;
+/// Frames the placement check may wait for the display scale to settle.
+const PLACEMENT_DEFERRALS: u8 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -140,6 +149,18 @@ pub struct ChronoApp {
     /// Last size requested from the OS, to avoid resize commands every frame.
     window_size: Option<Vec2>,
     window_styled: bool,
+    /// The position as it came out of `app.ron`, kept apart from `settings`
+    /// because `persist` overwrites that one with wherever the window actually is.
+    saved_position: Option<config::WindowPos>,
+    /// Frames the placement check may still be put off while the display scale
+    /// settles; `None` once it has run. Counted down rather than waited on, so
+    /// a scale that never agrees costs a few frames instead of looping forever.
+    placement_pending: Option<u8>,
+    /// A position we asked the OS for, in **physical pixels**, until the window
+    /// reports that it got there. Physical because a move to a screen with
+    /// another scaling factor changes what a point is worth, and a point-space
+    /// comparison would then never match.
+    pending_move: Option<(Pos2, Instant)>,
     wheel: f32,
 }
 
@@ -170,6 +191,9 @@ impl ChronoApp {
         Ok(Self {
             countdown: Countdown::new(minutes(settings.timer_minutes)),
             saved: settings.clone(),
+            saved_position: settings.window,
+            placement_pending: Some(PLACEMENT_DEFERRALS),
+            pending_move: None,
             settings,
             config_path: config::config_path(),
             dirty_since: repaired.then(Instant::now),
@@ -188,7 +212,11 @@ impl ChronoApp {
     /// Notes the current window position and writes the config once it has been
     /// unchanged for [`SAVE_DELAY`].
     fn persist(&mut self, ctx: &egui::Context, now: Instant) {
-        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+        // While a move of ours is in flight the window still reports the old
+        // position, and recording it would undo the move in the file.
+        if self.placement_settled(ctx, now)
+            && let Some(rect) = ctx.input(|i| i.viewport().outer_rect)
+        {
             let pos = config::WindowPos { x: rect.min.x, y: rect.min.y };
             if self.settings.window != Some(pos) {
                 self.settings.window = Some(pos);
@@ -214,6 +242,91 @@ impl ChronoApp {
             Ok(()) => self.saved = self.settings.clone(),
             Err(err) => eprintln!("ChronoDesk: could not save config: {err}"),
         }
+    }
+
+    /// True once the window sits where we last asked it to, so its reported
+    /// position can be trusted again.
+    fn placement_settled(&mut self, ctx: &egui::Context, now: Instant) -> bool {
+        let Some((target, since)) = self.pending_move else {
+            return true;
+        };
+        let ppp = ctx.pixels_per_point();
+        let arrived = ctx.input(|i| i.viewport().outer_rect).is_some_and(|rect| {
+            (rect.min.to_vec2() * ppp - target.to_vec2()).length() <= ARRIVAL_TOLERANCE_PX
+        });
+        // A window manager is free to ignore a move, so this cannot wait forever.
+        if arrived || now.duration_since(since) >= PLACEMENT_TIMEOUT {
+            self.pending_move = None;
+            return true;
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+        false
+    }
+
+    /// Checks the saved position against the monitors that are actually
+    /// attached, and moves the overlay somewhere safe if it is stranded.
+    ///
+    /// `size` is the window's size in points, which is why this runs after the
+    /// layout has been measured rather than in `main`: placing the overlay
+    /// against the top-right corner needs its real width, and at window-creation
+    /// time that is still a placeholder.
+    fn check_placement(&mut self, ctx: &egui::Context, frame: &eframe::Frame, size: Vec2, now: Instant) {
+        let (ppp, zoom) = (ctx.pixels_per_point(), ctx.zoom_factor());
+        // egui's points are physical pixels divided by the scale of the monitor
+        // the window is on. Right after startup eframe may not have picked that
+        // scale up yet, and converting with the wrong one would misplace the
+        // window by the ratio between them, so wait until the two agree.
+        if let Some(left) = self.placement_pending.filter(|&n| n > 0)
+            && let Some(window) = frame.winit_window()
+            && (ppp - window.scale_factor() as f32 * zoom).abs() > 1e-3
+        {
+            self.placement_pending = Some(left - 1);
+            ctx.request_repaint();
+            return;
+        }
+        self.placement_pending = None;
+
+        let Some(saved) = self.saved_position else {
+            self.instrument.set_placement_report("decision=no-saved-position".to_owned());
+            return;
+        };
+        let monitors = placement::monitors(frame);
+        let saved_px = pos2(saved.x * ppp, saved.y * ppp);
+        let outcome = placement::evaluate(saved_px, size, zoom, &monitors);
+
+        let decision = match outcome {
+            placement::Outcome::Keep => "keep".to_owned(),
+            placement::Outcome::Move { to, reason } => {
+                let to_pt = pos2(to.x / ppp, to.y / ppp);
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(to_pt));
+                self.settings.window = Some(config::WindowPos { x: to_pt.x, y: to_pt.y });
+                self.pending_move = Some((to, now));
+                // Straight to disk: the point of the exercise is that the next
+                // launch starts from a position that exists.
+                self.write_config();
+                eprintln!(
+                    "ChronoDesk: saved position ({:.0},{:.0}) is {}; moved to ({:.0},{:.0})",
+                    saved.x,
+                    saved.y,
+                    reason.as_str(),
+                    to_pt.x,
+                    to_pt.y,
+                );
+                ctx.request_repaint();
+                format!("{} moved_to_pt=({:.1},{:.1}) moved_to_px=({:.0},{:.0})", reason.as_str(), to_pt.x, to_pt.y, to.x, to.y)
+            }
+        };
+        self.instrument.set_placement_report(format!(
+            "decision={decision} ppp={ppp:.3} zoom={zoom:.3} size_pt=({:.1},{:.1}) \
+             saved_pt=({:.1},{:.1}) saved_px=({:.0},{:.0}) monitors=[{}]",
+            size.x,
+            size.y,
+            saved.x,
+            saved.y,
+            saved_px.x,
+            saved_px.y,
+            placement::describe(&monitors),
+        ));
     }
 
     fn apply(&mut self, cmd: Command, ctx: &egui::Context, now: Instant) {
@@ -456,7 +569,18 @@ impl eframe::App for ChronoApp {
         let theme = &theme;
 
         let content = vec2(main_width.max(caption_galley.size().x), main_height + m.caption_height);
-        self.fit_window(&ctx, (content + m.pad * 2.0).ceil());
+        let window_size = (content + m.pad * 2.0).ceil();
+        self.fit_window(&ctx, window_size);
+
+        // Now that the real size is known, the saved position can be judged
+        // against the monitors that are actually attached.
+        if let Some(synthetic) = self.instrument.take_place_request() {
+            self.saved_position = Some(config::WindowPos { x: synthetic.x, y: synthetic.y });
+            self.placement_pending = Some(PLACEMENT_DEFERRALS);
+        }
+        if self.placement_pending.is_some() {
+            self.check_placement(&ctx, frame, window_size, now);
+        }
 
         if s.backdrop {
             painter.rect_filled(rect, m.corner, theme.color.backdrop);

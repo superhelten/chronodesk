@@ -3,3 +3,7 @@
 # Local runtime state (eframe persistence)
 /data
 app.ron
+
+# Screenshots and the config backup that scripts/instrument-test.ps1 leaves behind
+/scripts/*.png
+/scripts/user_app_instr.ron
