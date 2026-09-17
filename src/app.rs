@@ -15,7 +15,11 @@ use crate::tray::{Command, MenuState, Tray};
 
 const TEXT: Color32 = Color32::from_rgb(242, 242, 240);
 const ALERT: Color32 = Color32::from_rgb(245, 165, 36);
-const SHADOW: Color32 = Color32::from_black_alpha(150);
+/// Per-copy alpha of the dark halo drawn around the glyphs when there is no
+/// backdrop, so white text keeps defined edges on top of a white document.
+/// The copies overlap, so these are low: measured over pure white the halo
+/// lands near #464646, giving the glyph ~9:1 without looking like a sticker.
+const HALO_ALPHA: [u8; 2] = [34, 22];
 const BACKDROP: Color32 = Color32::from_rgba_premultiplied(8, 8, 10, 178);
 const CHROMA: Color32 = Color32::from_rgb(0, 255, 0);
 const DISPLAY_FONT: &str = "display";
@@ -236,6 +240,7 @@ impl ChronoApp {
             },
             Command::SetSize(size) => s.size = size,
             Command::ToggleBackdrop => s.backdrop = !s.backdrop,
+            Command::ToggleOutline => s.text_outline = !s.text_outline,
             Command::ToggleChroma => s.chroma = !s.chroma,
             Command::ToggleSeconds => s.show_seconds = !s.show_seconds,
             Command::ToggleOnTop => {
@@ -312,6 +317,7 @@ impl ChronoApp {
             start_label,
             size: s.size,
             backdrop: s.backdrop,
+            text_outline: s.text_outline,
             chroma: s.chroma,
             show_seconds: s.show_seconds,
             always_on_top: s.always_on_top,
@@ -418,7 +424,8 @@ impl eframe::App for ChronoApp {
         let font = s.size.font_size();
         let caption_size = (font * 0.26).max(10.0);
         let pad = vec2(font * 0.36, font * 0.16);
-        let shadow = !s.backdrop && !s.chroma;
+        // A backdrop already separates the text from whatever is behind it.
+        let outline = (s.text_outline && !s.backdrop).then(|| (font * 0.028).clamp(1.0, 1.7));
         let painter = ui.painter().clone();
 
         // Measure first so the window can hug the content.
@@ -437,7 +444,7 @@ impl eframe::App for ChronoApp {
         }
 
         let main_origin = pos2(rect.center().x - main.width / 2.0, rect.top() + pad.y);
-        main.paint(&painter, main_origin, readout.color, shadow);
+        main.paint(&painter, main_origin, readout.color, outline);
 
         let caption_rect = Rect::from_min_size(
             pos2(rect.left(), main_origin.y + main.height),
@@ -449,11 +456,15 @@ impl eframe::App for ChronoApp {
             pending = controls(ui, caption_rect, caption_size * 1.25, self.menu_state(now).start_label);
         } else {
             let pos = caption_rect.center() - caption.size() / 2.0;
-            let color = if readout.color == TEXT { TEXT.gamma_multiply(0.62) } else { readout.color };
-            if shadow {
-                painter.galley_with_override_text_color(pos + vec2(1.0, 1.0), caption.clone(), SHADOW);
-            }
-            painter.galley_with_override_text_color(pos, caption, color);
+            // Dimming the caption over an outline would eat the contrast the
+            // outline just bought, so only dim it when there is a backdrop.
+            let color = match (readout.color, outline) {
+                (TEXT, None) => TEXT.gamma_multiply(0.62),
+                (color, _) => color,
+            };
+            // The caption is far smaller, so it gets the thinnest ring that
+            // still separates it from the background.
+            paint_galley(&painter, pos, caption, color, outline.map(|_| 1.0));
         }
         if let Some(cmd) = pending {
             self.apply(cmd, &ctx, now);
@@ -572,18 +583,49 @@ impl DigitLine {
         })
     }
 
-    fn paint(&self, painter: &egui::Painter, origin: Pos2, color: Color32, shadow: bool) {
-        let offset = (self.height * 0.03).max(1.0);
+    fn paint(&self, painter: &egui::Painter, origin: Pos2, color: Color32, outline: Option<f32>) {
         let mut x = origin.x;
         for (galley, cell) in &self.glyphs {
             let pos = pos2(x + (cell - galley.size().x) / 2.0, origin.y);
-            if shadow {
-                painter.galley_with_override_text_color(pos + vec2(offset, offset), galley.clone(), SHADOW);
-            }
-            painter.galley_with_override_text_color(pos, galley.clone(), color);
+            paint_galley(painter, pos, galley.clone(), color, outline);
             x += cell;
         }
     }
+}
+
+/// Draws `galley`, optionally haloed by a dark edge `width` points thick.
+///
+/// egui has no outlined text, so the halo is offset copies of the glyph. Two
+/// rings of eight, the outer one fainter, read as a soft dark edge; a single
+/// hard ring at a width thin strokes can stand turns the readout into a hollow
+/// outline font instead.
+fn paint_galley(
+    painter: &egui::Painter,
+    pos: Pos2,
+    galley: Arc<Galley>,
+    color: Color32,
+    outline: Option<f32>,
+) {
+    if let Some(width) = outline {
+        for (radius, alpha) in [(width, HALO_ALPHA[0]), (width * 2.1, HALO_ALPHA[1])] {
+            let diagonal = radius * std::f32::consts::FRAC_1_SQRT_2;
+            let ring = [
+                vec2(radius, 0.0),
+                vec2(-radius, 0.0),
+                vec2(0.0, radius),
+                vec2(0.0, -radius),
+                vec2(diagonal, diagonal),
+                vec2(diagonal, -diagonal),
+                vec2(-diagonal, diagonal),
+                vec2(-diagonal, -diagonal),
+            ];
+            let shade = Color32::from_black_alpha(alpha);
+            for offset in ring {
+                painter.galley_with_override_text_color(pos + offset, galley.clone(), shade);
+            }
+        }
+    }
+    painter.galley_with_override_text_color(pos, galley, color);
 }
 
 /// Letter-spaced caption ("T I M E R"-lite): thin spaces read cleaner at small sizes.

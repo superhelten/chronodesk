@@ -24,6 +24,7 @@ pub enum Command {
     Reset,
     SetSize(Size),
     ToggleBackdrop,
+    ToggleOutline,
     ToggleChroma,
     ToggleSeconds,
     ToggleOnTop,
@@ -37,6 +38,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "startpause" => Command::StartPause,
         "reset" => Command::Reset,
         "backdrop" => Command::ToggleBackdrop,
+        "outline" => Command::ToggleOutline,
         "chroma" => Command::ToggleChroma,
         "seconds" => Command::ToggleSeconds,
         "ontop" => Command::ToggleOnTop,
@@ -63,6 +65,7 @@ pub struct MenuState {
     pub start_label: &'static str,
     pub size: Size,
     pub backdrop: bool,
+    pub text_outline: bool,
     pub chroma: bool,
     pub show_seconds: bool,
     pub always_on_top: bool,
@@ -78,6 +81,7 @@ pub struct Tray {
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
     backdrop: CheckMenuItem,
+    outline: CheckMenuItem,
     chroma: CheckMenuItem,
     seconds: CheckMenuItem,
     on_top: CheckMenuItem,
@@ -133,6 +137,7 @@ impl Tray {
         let sizes: Vec<_> =
             Size::ALL.into_iter().map(|s| (s, check(&format!("size:{}", s.id()), s.label()))).collect();
         let backdrop = check("backdrop", "Backdrop");
+        let outline = check("outline", "Text outline");
         let chroma = check("chroma", "Chroma key background (#00FF00)");
         let seconds = check("seconds", "Show seconds");
         let on_top = check("ontop", "Always on top");
@@ -156,6 +161,7 @@ impl Tray {
             &s3,
             &size_menu,
             &backdrop,
+            &outline,
             &chroma,
             &seconds,
             &on_top,
@@ -184,6 +190,7 @@ impl Tray {
             reset,
             sizes,
             backdrop,
+            outline,
             chroma,
             seconds,
             on_top,
@@ -225,6 +232,9 @@ impl Tray {
             item.set_checked(*size == state.size);
         }
         self.backdrop.set_checked(state.backdrop);
+        self.outline.set_checked(state.text_outline);
+        // An outline under a backdrop would be invisible anyway.
+        self.outline.set_enabled(!state.backdrop);
         self.chroma.set_checked(state.chroma);
         self.seconds.set_checked(state.show_seconds);
         self.on_top.set_checked(state.always_on_top);

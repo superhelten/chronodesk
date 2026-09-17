@@ -22,6 +22,7 @@ Requires Rust 1.95+ (eframe 0.36).
 | Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer |
 | Timer duration | Menu → *Timer duration*, or scroll over an idle timer (±1 min per notch) |
 | Streaming | Menu → *Chroma key background (#00FF00)* |
+| Text over bright windows | Menu → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop) |
 
 While locked the overlay ignores the mouse entirely, so the tray icon is the way back.
 Locking is disabled if the tray icon could not be created, and the app always starts unlocked.

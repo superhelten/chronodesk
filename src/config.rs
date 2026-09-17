@@ -45,6 +45,8 @@ pub struct Config {
     pub chroma: bool,
     pub show_seconds: bool,
     pub always_on_top: bool,
+    /// Dark outline around the text, for legibility without a backdrop.
+    pub text_outline: bool,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -60,6 +62,7 @@ impl Default for Config {
             chroma: false,
             show_seconds: true,
             always_on_top: true,
+            text_outline: true,
             window: None,
         }
     }
@@ -163,6 +166,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "chroma", &mut config.chroma, &mut warnings);
     field(&mut fields, "show_seconds", &mut config.show_seconds, &mut warnings);
     field(&mut fields, "always_on_top", &mut config.always_on_top, &mut warnings);
+    field(&mut fields, "text_outline", &mut config.text_outline, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -422,6 +426,37 @@ mod tests {
         assert!(!loaded.config.show_seconds);
         assert_eq!(loaded.config.window, Some(WindowPos { x: 5.0, y: 6.0 }));
         assert!(loaded.warnings[0].contains("timer_minutes"), "{:?}", loaded.warnings);
+    }
+
+    /// Files written before `text_outline` existed must keep working, and get
+    /// the outline enabled.
+    #[test]
+    fn config_without_outline_field_defaults_to_enabled() {
+        let dir = Dir::new("outline_default");
+        let path = dir.file();
+        write(
+            &path,
+            "(schema_version:1,mode:\"clock\",timer_minutes:25,size:\"medium\",backdrop:false,chroma:false,show_seconds:true,always_on_top:true,window:Some((x:10.0,y:20.0)))",
+        );
+
+        let loaded = load(&path);
+        assert!(loaded.config.text_outline);
+        assert_eq!(loaded.config.window, Some(WindowPos { x: 10.0, y: 20.0 }));
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn outline_field_round_trips_and_tolerates_a_bad_value() {
+        let dir = Dir::new("outline_bad");
+        let path = dir.file();
+        save(&path, &Config { text_outline: false, ..Default::default() }).unwrap();
+        assert!(!load(&path).config.text_outline, "explicit false must survive a round trip");
+
+        write(&path, "(schema_version:1,text_outline:\"yes please\",chroma:true)");
+        let loaded = load(&path);
+        assert!(loaded.config.text_outline, "a bad value falls back to the default");
+        assert!(loaded.config.chroma, "other fields survive");
+        assert!(loaded.warnings[0].contains("text_outline"), "{:?}", loaded.warnings);
     }
 
     #[test]
