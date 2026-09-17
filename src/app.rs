@@ -10,18 +10,11 @@ use eframe::egui::{
 use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
+use crate::layout::{self, DerivedLayout, Glyphs, LayoutKey, Metrics};
+use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
 
-const TEXT: Color32 = Color32::from_rgb(242, 242, 240);
-const ALERT: Color32 = Color32::from_rgb(245, 165, 36);
-/// Per-copy alpha of the dark halo drawn around the glyphs when there is no
-/// backdrop, so white text keeps defined edges on top of a white document.
-/// The copies overlap, so these are low: measured over pure white the halo
-/// lands near #464646, giving the glyph ~9:1 without looking like a sticker.
-const HALO_ALPHA: [u8; 2] = [34, 22];
-const BACKDROP: Color32 = Color32::from_rgba_premultiplied(8, 8, 10, 178);
-const CHROMA: Color32 = Color32::from_rgb(0, 255, 0);
 const DISPLAY_FONT: &str = "display";
 /// How long a finished timer blinks before settling on a steady colour.
 const BLINK_FOR: Duration = Duration::from_secs(30);
@@ -93,7 +86,7 @@ impl Size {
         }
     }
 
-    fn font_size(self) -> f32 {
+    pub fn font_size(self) -> f32 {
         match self {
             Self::Small => 28.0,
             Self::Medium => 44.0,
@@ -139,6 +132,9 @@ pub struct ChronoApp {
     stopwatch: Stopwatch,
     countdown: Countdown,
     tray: Tray,
+    theme: Theme,
+    /// Cached layout: rebuilt on size or scale changes, not per frame.
+    layout: DerivedLayout,
     /// Last size requested from the OS, to avoid resize commands every frame.
     window_size: Option<Vec2>,
     window_styled: bool,
@@ -178,6 +174,8 @@ impl ChronoApp {
             locked: false,
             stopwatch: Stopwatch::default(),
             tray: Tray::new(&cc.egui_ctx),
+            layout: DerivedLayout::new(&Theme::default()),
+            theme: Theme::default(),
             window_size: None,
             window_styled: false,
             wheel: 0.0,
@@ -327,6 +325,7 @@ impl ChronoApp {
     /// Big readout, small caption line, colour, and when the display next changes.
     fn readout(&self, now: Instant) -> Readout {
         let s = &self.settings;
+        let c = &self.theme.color;
         match s.mode {
             Mode::Clock => {
                 let t = Local::now();
@@ -339,7 +338,7 @@ impl ChronoApp {
                 Readout {
                     main,
                     caption: t.format("%a %-d %b").to_string().to_uppercase(),
-                    color: TEXT,
+                    color: c.text,
                     next_change: Some(Duration::from_nanos(until_change)),
                 }
             }
@@ -349,7 +348,7 @@ impl ChronoApp {
                 Readout {
                     main: timer::format_stopwatch(elapsed),
                     caption: if running || elapsed.is_zero() { "STOPWATCH" } else { "PAUSED" }.into(),
-                    color: TEXT,
+                    color: c.text,
                     next_change: running.then(|| timer::next_stopwatch_tick(elapsed)),
                 }
             }
@@ -364,7 +363,7 @@ impl ChronoApp {
                     Readout {
                         main: timer::format_countdown(remaining),
                         caption: "TIME'S UP".into(),
-                        color: if lit { ALERT } else { ALERT.gamma_multiply(0.25) },
+                        color: if lit { c.alert } else { c.alert.gamma_multiply(0.25) },
                         next_change: blinking.then(|| Duration::from_millis(next)),
                     }
                 } else {
@@ -379,7 +378,7 @@ impl ChronoApp {
                     Readout {
                         main: timer::format_countdown(remaining),
                         caption,
-                        color: TEXT,
+                        color: c.text,
                         next_change: running.then(|| timer::next_countdown_tick(remaining)),
                     }
                 }
@@ -421,50 +420,70 @@ impl eframe::App for ChronoApp {
 
         let s = self.settings.clone();
         let readout = self.readout(now);
-        let font = s.size.font_size();
-        let caption_size = (font * 0.26).max(10.0);
-        let pad = vec2(font * 0.36, font * 0.16);
-        // A backdrop already separates the text from whatever is behind it.
-        let outline = (s.text_outline && !s.backdrop).then(|| (font * 0.028).clamp(1.0, 1.7));
         let painter = ui.painter().clone();
 
-        // Measure first so the window can hug the content.
-        let main = DigitLine::layout(&ctx, &readout.main, FontId::new(font, display_family()));
-        let caption_font = FontId::new(caption_size, display_family());
-        let caption = painter.layout_no_wrap(spaced(&readout.caption), caption_font, TEXT);
-        let caption_h = caption_size * 1.5;
-        let content = vec2(main.width.max(caption.size().x), main.height + caption_h);
-        self.fit_window(&ctx, (content + pad * 2.0).ceil());
+        // Rebuilt only when the size or the display scale changes; every frame
+        // in between reads cached numbers.
+        let theme = self.theme;
+        let key = LayoutKey::new(s.size, ctx.pixels_per_point());
+        self.layout.ensure(key, &theme, |metrics| measure_glyphs(&ctx, metrics.font));
+        let m = *self.layout.metrics();
+        // A backdrop already separates the text from whatever is behind it.
+        let halo = (s.text_outline && !s.backdrop).then_some(m.halo_width);
+
+        let main_width = self.layout.width_of(&readout.main);
+        let main_height = self.layout.glyphs().height;
+        let caption_galley = {
+            let font = FontId::new(m.caption_font, display_family());
+            let text = spaced(&readout.caption);
+            let painter = painter.clone();
+            self.layout.caption_galley(&readout.caption, m.caption_font, move || {
+                painter.layout_no_wrap(text, font, theme.color.text)
+            })
+        };
+        let theme = &theme;
+
+        let content = vec2(main_width.max(caption_galley.size().x), main_height + m.caption_height);
+        self.fit_window(&ctx, (content + m.pad * 2.0).ceil());
 
         if s.backdrop {
-            painter.rect_filled(rect, font * 0.22, BACKDROP);
+            painter.rect_filled(rect, m.corner, theme.color.backdrop);
         }
         if hovered && !s.backdrop {
-            painter.rect_stroke(rect.shrink(0.5), font * 0.22, Stroke::new(1.0, Color32::from_white_alpha(46)), StrokeKind::Inside);
+            let stroke = Stroke::new(1.0, theme.color.hover_frame);
+            painter.rect_stroke(rect.shrink(0.5), m.corner, stroke, StrokeKind::Inside);
         }
 
-        let main_origin = pos2(rect.center().x - main.width / 2.0, rect.top() + pad.y);
-        main.paint(&painter, main_origin, readout.color, outline);
+        let main_origin = pos2(rect.center().x - main_width / 2.0, rect.top() + m.pad.y);
+        let mut x = main_origin.x;
+        for c in readout.main.chars() {
+            let cell = self.layout.cell_width(c);
+            if let Some(galley) = self.layout.galley(c) {
+                let pos = pos2(x + (cell - galley.size().x) / 2.0, main_origin.y);
+                paint_galley(&painter, pos, galley.clone(), readout.color, halo, theme);
+            }
+            x += cell;
+        }
 
         let caption_rect = Rect::from_min_size(
-            pos2(rect.left(), main_origin.y + main.height),
-            vec2(rect.width(), caption_h),
+            pos2(rect.left(), main_origin.y + main_height),
+            vec2(rect.width(), m.caption_height),
         );
         let show_controls = hovered && s.mode != Mode::Clock;
         let mut pending = None;
         if show_controls {
-            pending = controls(ui, caption_rect, caption_size * 1.25, self.menu_state(now).start_label);
+            pending = controls(ui, caption_rect, &m, theme, self.menu_state(now).start_label);
         } else {
-            let pos = caption_rect.center() - caption.size() / 2.0;
-            // Dimming the caption over an outline would eat the contrast the
-            // outline just bought, so only dim it when there is a backdrop.
-            let color = match (readout.color, outline) {
-                (TEXT, None) => TEXT.gamma_multiply(0.62),
-                (color, _) => color,
+            let pos = caption_rect.center() - caption_galley.size() / 2.0;
+            // Dimming the caption over a halo would eat the contrast the halo
+            // just bought, so only dim it when there is a backdrop.
+            let color = match (readout.color == theme.color.text, halo) {
+                (true, None) => theme.color.text.gamma_multiply(theme.color.caption_dim),
+                _ => readout.color,
             };
             // The caption is far smaller, so it gets the thinnest ring that
             // still separates it from the background.
-            paint_galley(&painter, pos, caption, color, outline.map(|_| 1.0));
+            paint_galley(&painter, pos, caption_galley, color, halo.map(|_| 1.0), theme);
         }
         if let Some(cmd) = pending {
             self.apply(cmd, &ctx, now);
@@ -491,7 +510,11 @@ impl eframe::App for ChronoApp {
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if self.settings.chroma { CHROMA.to_normalized_gamma_f32() } else { [0.0; 4] }
+        if self.settings.chroma {
+            self.theme.color.chroma.to_normalized_gamma_f32()
+        } else {
+            [0.0; 4]
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -515,8 +538,14 @@ impl ChronoApp {
 }
 
 /// Start/pause and reset buttons, drawn as shapes so no icon font is needed.
-fn controls(ui: &mut egui::Ui, area: Rect, size: f32, start_label: &str) -> Option<Command> {
-    let gap = size * 0.9;
+fn controls(
+    ui: &mut egui::Ui,
+    area: Rect,
+    metrics: &Metrics,
+    theme: &Theme,
+    start_label: &str,
+) -> Option<Command> {
+    let (size, gap) = (metrics.control, metrics.control_gap);
     let center = area.center();
     let buttons = [
         (Rect::from_center_size(center - vec2((size + gap) / 2.0, 0.0), Vec2::splat(size)), Command::StartPause),
@@ -524,17 +553,26 @@ fn controls(ui: &mut egui::Ui, area: Rect, size: f32, start_label: &str) -> Opti
     ];
     let mut clicked = None;
     for (rect, cmd) in buttons {
-        let response = ui.interact(rect, ui.id().with(format!("{cmd:?}")), Sense::click());
-        let alpha = if response.hovered() { 255 } else { 235 };
+        // A stable id per button: `format!` here would allocate every frame.
+        let id = ui.id().with(match cmd {
+            Command::StartPause => "start_pause",
+            _ => "reset",
+        });
+        let response = ui.interact(rect, id, Sense::click());
+        let alpha = if response.hovered() {
+            theme.color.control_glyph_hover
+        } else {
+            theme.color.control_glyph
+        };
         let color = Color32::from_white_alpha(alpha);
         let painter = ui.painter();
-        // Dark base keeps the glyphs legible over busy windows behind the overlay;
-        // alpha 190 holds ~9:1 glyph contrast even over pure white.
-        painter.circle_filled(rect.center(), size * 0.78, Color32::from_black_alpha(190));
+        let disc = size * theme.ratio.control_disc;
+        // Dark base keeps the glyphs legible over busy windows behind the overlay.
+        painter.circle_filled(rect.center(), disc, theme.color.control_base);
         if response.hovered() {
-            painter.circle_filled(rect.center(), size * 0.78, Color32::from_white_alpha(36));
+            painter.circle_filled(rect.center(), disc, theme.color.control_hover);
         }
-        let r = rect.shrink(size * 0.22);
+        let r = rect.shrink(size * theme.ratio.control_inset);
         match cmd {
             Command::StartPause if start_label == "Pause" => {
                 let bar = vec2(r.width() * 0.3, r.height());
@@ -556,41 +594,25 @@ fn controls(ui: &mut egui::Ui, area: Rect, size: f32, start_label: &str) -> Opti
     clicked
 }
 
-/// A line of text where every digit gets the same cell width, so the readout
-/// doesn't jitter as numbers change regardless of the font's digit metrics.
-struct DigitLine {
-    glyphs: Vec<(Arc<Galley>, f32)>,
-    width: f32,
-    height: f32,
-}
-
-impl DigitLine {
-    fn layout(ctx: &egui::Context, text: &str, font: FontId) -> Self {
-        ctx.fonts_mut(|fonts| {
-            let mut layout = |s: String| fonts.layout_no_wrap(s, font.clone(), Color32::WHITE);
-            let digit_w = ('0'..='9').map(|d| layout(d.to_string()).size().x).fold(0.0, f32::max);
-            let glyphs: Vec<_> = text
-                .chars()
-                .map(|c| {
-                    let g = layout(c.to_string());
-                    let cell = if c.is_ascii_digit() { digit_w } else { g.size().x };
-                    (g, cell)
-                })
-                .collect();
-            let width = glyphs.iter().map(|(_, w)| w).sum();
-            let height = glyphs.iter().map(|(g, _)| g.size().y).fold(0.0, f32::max);
-            Self { glyphs, width, height }
-        })
-    }
-
-    fn paint(&self, painter: &egui::Painter, origin: Pos2, color: Color32, outline: Option<f32>) {
-        let mut x = origin.x;
-        for (galley, cell) in &self.glyphs {
-            let pos = pos2(x + (cell - galley.size().x) / 2.0, origin.y);
-            paint_galley(painter, pos, galley.clone(), color, outline);
-            x += cell;
+/// Lays out every character a readout can contain, once per font size. Digits
+/// share the widest digit's cell so the readout doesn't jitter as it ticks,
+/// whatever the font's own digit metrics are.
+fn measure_glyphs(ctx: &egui::Context, font_size: f32) -> Glyphs {
+    let font = FontId::new(font_size, display_family());
+    ctx.fonts_mut(|fonts| {
+        let mut layout = |c: char| fonts.layout_no_wrap(c.to_string(), font.clone(), Color32::WHITE);
+        let digit_width = ('0'..='9').map(|d| layout(d).size().x).fold(0.0, f32::max);
+        let mut glyphs = Glyphs { digit_width, ..Default::default() };
+        for c in layout::READOUT_CHARS.chars() {
+            let galley = layout(c);
+            glyphs.height = glyphs.height.max(galley.size().y);
+            if !c.is_ascii_digit() {
+                glyphs.widths.insert(c, galley.size().x);
+            }
+            glyphs.galleys.insert(c, galley);
         }
-    }
+        glyphs
+    })
 }
 
 /// Draws `galley`, optionally haloed by a dark edge `width` points thick.
@@ -605,9 +627,10 @@ fn paint_galley(
     galley: Arc<Galley>,
     color: Color32,
     outline: Option<f32>,
+    theme: &Theme,
 ) {
     if let Some(width) = outline {
-        for (radius, alpha) in [(width, HALO_ALPHA[0]), (width * 2.1, HALO_ALPHA[1])] {
+        for (radius, alpha) in [(width, theme.color.halo[0]), (width * 2.1, theme.color.halo[1])] {
             let diagonal = radius * std::f32::consts::FRAC_1_SQRT_2;
             let ring = [
                 vec2(radius, 0.0),

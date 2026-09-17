@@ -50,6 +50,9 @@ automatically.
 
 - `src/main.rs` – window setup (transparent, borderless, always-on-top, hidden from taskbar)
 - `src/app.rs` – state, rendering, window sizing, repaint scheduling
+- `src/theme.rs` – visual tokens: colours, alphas and proportions
+- `src/layout.rs` – derived state: metrics and glyph measurements, rebuilt only when the size or display scale changes
+- `src/config.rs` – the config file: atomic saves, field-tolerant loading
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`
 - `src/timer.rs` – pure stopwatch/countdown logic and formatting (unit-tested)
 - `src/icon.rs` – procedurally drawn clock icon (no asset files)
