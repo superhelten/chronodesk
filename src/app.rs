@@ -450,11 +450,12 @@ fn controls(ui: &mut egui::Ui, area: Rect, size: f32, start_label: &str) -> Opti
     let mut clicked = None;
     for (rect, cmd) in buttons {
         let response = ui.interact(rect, ui.id().with(format!("{cmd:?}")), Sense::click());
-        let alpha = if response.hovered() { 255 } else { 190 };
+        let alpha = if response.hovered() { 255 } else { 235 };
         let color = Color32::from_white_alpha(alpha);
         let painter = ui.painter();
-        // Dark base keeps the glyphs legible over busy windows behind the overlay.
-        painter.circle_filled(rect.center(), size * 0.78, Color32::from_black_alpha(120));
+        // Dark base keeps the glyphs legible over busy windows behind the overlay;
+        // alpha 190 holds ~9:1 glyph contrast even over pure white.
+        painter.circle_filled(rect.center(), size * 0.78, Color32::from_black_alpha(190));
         if response.hovered() {
             painter.circle_filled(rect.center(), size * 0.78, Color32::from_white_alpha(36));
         }
