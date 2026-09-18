@@ -2,10 +2,10 @@
 //! rather than from the clock.
 //!
 //! None of this is persisted. It is rebuilt at startup and then only when its
-//! key changes — the chosen size, or the display scale. The readout itself
-//! changes every tick, but its *measurements* do not: digits share one cell
-//! width, so a line's width is a sum of cached numbers instead of a fresh text
-//! layout per frame.
+//! key changes — the chosen size, face, or the display scale. The readout
+//! itself changes every tick, but its *measurements* do not: digits share one
+//! cell width, so a line's width is a sum of cached numbers instead of a fresh
+//! text layout per frame.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,6 +78,13 @@ pub struct Metrics {
     pub halo_width: f32,
     pub control: f32,
     pub control_gap: f32,
+    /// Market board: the time on a row, the row's pitch, the gap between
+    /// columns, and the status dot.
+    pub row_font: f32,
+    pub row_pitch: f32,
+    pub board_gap: f32,
+    pub dot_radius: f32,
+    pub ring_width: f32,
 }
 
 impl Metrics {
@@ -85,6 +92,7 @@ impl Metrics {
         let r = &theme.ratio;
         let font = size.font_size();
         let caption_font = (font * r.caption).max(r.caption_min);
+        let row_font = (font * r.board_time).max(r.board_time_min);
         Self {
             font,
             caption_font,
@@ -94,6 +102,11 @@ impl Metrics {
             halo_width: (font * r.halo_width).clamp(r.halo_width_min, r.halo_width_max),
             control: caption_font * r.control,
             control_gap: caption_font * r.control * r.control_gap,
+            row_font,
+            row_pitch: row_font * r.board_pitch,
+            board_gap: caption_font * r.board_gap,
+            dot_radius: caption_font * r.board_dot,
+            ring_width: (caption_font * r.board_ring).max(1.0),
         }
     }
 }
@@ -106,9 +119,9 @@ pub enum Glyph {
     Digital(Vec<Vec<Pos2>>),
 }
 
-/// Measured glyphs for the current font size and face. `glyphs` is empty in
-/// tests, where only the measurements matter.
-#[derive(Debug, Default)]
+/// Measured glyphs for one font size and face. `glyphs` is empty in tests,
+/// where only the measurements matter.
+#[derive(Debug)]
 pub struct Glyphs {
     /// Every digit is drawn in a cell this wide, so the readout never jitters.
     pub digit_width: f32,
@@ -118,13 +131,48 @@ pub struct Glyphs {
     pub glyphs: HashMap<char, Glyph>,
 }
 
+impl Default for Glyphs {
+    fn default() -> Self {
+        Self { digit_width: 0.0, height: 0.0, widths: HashMap::new(), glyphs: HashMap::new() }
+    }
+}
+
+impl Glyphs {
+    /// Width of a readout line, from cached cell widths only.
+    pub fn width_of(&self, text: &str) -> f32 {
+        text.chars().map(|c| self.cell_width(c)).sum()
+    }
+
+    pub fn cell_width(&self, c: char) -> f32 {
+        if c.is_ascii_digit() {
+            self.digit_width
+        } else {
+            self.widths.get(&c).copied().unwrap_or(self.digit_width)
+        }
+    }
+
+    pub fn glyph(&self, c: char) -> Option<&Glyph> {
+        self.glyphs.get(&c)
+    }
+}
+
 pub struct DerivedLayout {
     key: Option<LayoutKey>,
     metrics: Metrics,
+    /// The main readout line, at `Metrics::font`.
     glyphs: Glyphs,
-    /// Key of the cached caption galley: its text and font size.
+    /// The market board's rows, at `Metrics::row_font`. Measured on the same
+    /// rebuild so switching modes never re-measures anything.
+    row_glyphs: Glyphs,
+    /// Key of the cached caption galley: its text and font size. One slot,
+    /// because the caption changes every minute at most and is replaced,
+    /// never revisited.
     caption_key: Option<(String, f32)>,
     caption_galley: Option<Arc<Galley>>,
+    /// Labels that are fixed for a market set (city names, AM/PM, the widest
+    /// captions), all at the caption size. Cleared on rebuild, never evicted
+    /// otherwise: there are a few dozen at most.
+    labels: HashMap<String, Arc<Galley>>,
     rebuilds: u32,
 }
 
@@ -134,8 +182,10 @@ impl DerivedLayout {
             key: None,
             metrics: Metrics::new(Size::default(), theme),
             glyphs: Glyphs::default(),
+            row_glyphs: Glyphs::default(),
             caption_key: None,
             caption_galley: None,
+            labels: HashMap::new(),
             rebuilds: 0,
         }
     }
@@ -148,6 +198,10 @@ impl DerivedLayout {
         &self.glyphs
     }
 
+    pub fn row_glyphs(&self) -> &Glyphs {
+        &self.row_glyphs
+    }
+
     /// Number of times the glyph cache has actually been rebuilt; used by the
     /// tests and the instrumentation to prove the frame loop is not
     /// re-measuring text.
@@ -156,41 +210,26 @@ impl DerivedLayout {
     }
 
     /// Rebuilds the cache when `key` differs from the cached one. `measure` is
-    /// only called then, and returns the glyphs for `Metrics::font`.
-    pub fn ensure(
-        &mut self,
-        key: LayoutKey,
-        theme: &Theme,
-        measure: impl FnOnce(&Metrics) -> Glyphs,
-    ) -> bool {
+    /// only called then, once per font size the layout needs.
+    pub fn ensure(&mut self, key: LayoutKey, theme: &Theme, mut measure: impl FnMut(f32) -> Glyphs) -> bool {
         if self.key == Some(key) {
             return false;
         }
         self.metrics = Metrics::new(key.size, theme);
-        self.glyphs = measure(&self.metrics);
+        self.glyphs = measure(self.metrics.font);
+        self.row_glyphs = measure(self.metrics.row_font);
         self.key = Some(key);
         // Galleys from the previous font size must not survive.
         self.caption_key = None;
         self.caption_galley = None;
+        self.labels.clear();
         self.rebuilds += 1;
         true
     }
 
-    /// Width of a readout line, from cached cell widths only.
+    /// Width of a main readout line, from cached cell widths only.
     pub fn width_of(&self, text: &str) -> f32 {
-        text.chars().map(|c| self.cell_width(c)).sum()
-    }
-
-    pub fn cell_width(&self, c: char) -> f32 {
-        if c.is_ascii_digit() {
-            self.glyphs.digit_width
-        } else {
-            self.glyphs.widths.get(&c).copied().unwrap_or(self.glyphs.digit_width)
-        }
-    }
-
-    pub fn glyph(&self, c: char) -> Option<&Glyph> {
-        self.glyphs.glyphs.get(&c)
+        self.glyphs.width_of(text)
     }
 
     fn caption_is_stale(&self, text: &str, font: f32) -> bool {
@@ -205,6 +244,22 @@ impl DerivedLayout {
             self.caption_galley = Some(layout());
         }
         self.caption_galley.clone().expect("just populated")
+    }
+
+    /// A fixed label at the caption size, laid out on first use and kept
+    /// until the next rebuild.
+    pub fn label_galley(&mut self, text: &str, layout: impl FnOnce(&str) -> Arc<Galley>) -> Arc<Galley> {
+        if let Some(galley) = self.labels.get(text) {
+            return galley.clone();
+        }
+        let galley = layout(text);
+        self.labels.insert(text.to_owned(), galley.clone());
+        galley
+    }
+
+    #[cfg(test)]
+    fn label_count(&self) -> usize {
+        self.labels.len()
     }
 }
 
@@ -222,8 +277,33 @@ mod tests {
         }
     }
 
+    /// Glyphs whose measurements record the font size they were asked for.
+    fn sized(font: f32) -> Glyphs {
+        Glyphs { digit_width: font, height: font, ..glyphs() }
+    }
+
     fn key(size: Size) -> LayoutKey {
         LayoutKey::new(size, 1.0, Font::Sans)
+    }
+
+    /// A galley needs a live font atlas, which a headless context provides
+    /// inside a pass; no window or GPU is involved.
+    fn with_fonts(f: impl FnOnce(&dyn Fn(&str) -> Arc<Galley>)) {
+        let ctx = eframe::egui::Context::default();
+        let mut f = Some(f);
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let ctx = ui.ctx();
+            let lay = |text: &str| {
+                ctx.fonts_mut(|fonts| {
+                    fonts.layout_no_wrap(text.to_owned(), eframe::egui::FontId::proportional(11.0), eframe::egui::Color32::WHITE)
+                })
+            };
+            if let Some(f) = f.take() {
+                f(&lay);
+            }
+        });
+        // Nothing consumes the font atlas here.
+        out.textures_delta.clear();
     }
 
     #[test]
@@ -234,8 +314,24 @@ mod tests {
         assert!(large.font > small.font);
         assert!(large.pad.x > small.pad.x);
         assert!(large.control > small.control);
+        assert!(large.row_font > small.row_font);
+        assert!(large.row_pitch > large.row_font, "rows need room above and below the digits");
         // The caption has a floor so it stays readable at the smallest size.
         assert!(small.caption_font >= theme.ratio.caption_min);
+    }
+
+    /// The board's digits are half the main size, but at the smallest size
+    /// that would drop under the legibility floor, so they stop there.
+    #[test]
+    fn row_font_has_a_floor_and_stays_below_the_main_font() {
+        let theme = Theme::default();
+        for size in Size::ALL {
+            let m = Metrics::new(size, &theme);
+            assert!(m.row_font >= theme.ratio.board_time_min, "{size:?}");
+            assert!(m.row_font < m.font, "{size:?}");
+            assert!(m.row_font > m.caption_font, "{size:?}: the time must outrank the city label");
+        }
+        assert_eq!(Metrics::new(Size::Small, &theme).row_font, theme.ratio.board_time_min);
     }
 
     #[test]
@@ -306,26 +402,33 @@ mod tests {
         layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Digital), &theme, |_| Glyphs {
             digit_width: 10.0,
             height: 20.0,
-            widths: HashMap::new(),
             glyphs: HashMap::from([('8', Glyph::Digital(vec![square.clone()]))]),
+            ..Glyphs::default()
         });
-        match layout.glyph('8') {
+        match layout.glyphs().glyph('8') {
             Some(Glyph::Digital(polygons)) => assert_eq!(polygons, &vec![square]),
             other => panic!("expected a digital glyph, got {other:?}"),
         }
-        assert!(layout.glyph('9').is_none());
+        assert!(layout.glyphs().glyph('9').is_none());
     }
 
+    /// One rebuild measures both faces the renderer can need: the main line
+    /// at the main size and the board rows at the row size. Mode is not in
+    /// the key, so a mode switch costs nothing.
     #[test]
-    fn measure_receives_the_updated_metrics() {
+    fn a_rebuild_measures_the_main_line_and_the_board_rows() {
         let theme = Theme::default();
         let mut layout = DerivedLayout::new(&theme);
-        let mut seen = 0.0;
-        layout.ensure(key(Size::Large), &theme, |m| {
-            seen = m.font;
-            glyphs()
+        let mut asked = Vec::new();
+        layout.ensure(key(Size::Large), &theme, |font| {
+            asked.push(font);
+            sized(font)
         });
-        assert_eq!(seen, Size::Large.font_size());
+        let m = *layout.metrics();
+        assert_eq!(asked, vec![m.font, m.row_font]);
+        assert_eq!(layout.glyphs().digit_width, m.font);
+        assert_eq!(layout.row_glyphs().digit_width, m.row_font);
+        assert_eq!(m.font, Size::Large.font_size());
     }
 
     #[test]
@@ -344,10 +447,7 @@ mod tests {
 
     #[test]
     fn unknown_characters_fall_back_to_a_digit_cell() {
-        let theme = Theme::default();
-        let mut layout = DerivedLayout::new(&theme);
-        layout.ensure(key(Size::Medium), &theme, |_| glyphs());
-        assert_eq!(layout.cell_width('?'), 24.0);
+        assert_eq!(glyphs().cell_width('?'), 24.0);
     }
 
     #[test]
@@ -372,5 +472,32 @@ mod tests {
         layout.caption_key = Some(("TIMER".to_owned(), 11.0));
         layout.ensure(key(Size::Large), &theme, |_| glyphs());
         assert!(layout.caption_is_stale("TIMER", 11.0), "galleys from the old font must not survive");
+    }
+
+    /// City labels are laid out once per rebuild, however many frames ask
+    /// for them, and a changing caption never evicts them.
+    #[test]
+    fn labels_are_laid_out_once_and_survive_caption_changes() {
+        let theme = Theme::default();
+        let mut layout = DerivedLayout::new(&theme);
+        layout.ensure(key(Size::Medium), &theme, |_| glyphs());
+
+        let mut layouts = 0;
+        with_fonts(|lay| {
+            for frame in 0..100 {
+                for city in ["NEW YORK", "LONDON", "TOKYO"] {
+                    layout.label_galley(city, |text| {
+                        layouts += 1;
+                        lay(text)
+                    });
+                }
+                layout.caption_galley(&format!("LONDON CLOSES IN {frame}M"), 11.0, || lay("caption"));
+            }
+        });
+        assert_eq!(layouts, 3);
+        assert_eq!(layout.label_count(), 3);
+
+        layout.ensure(key(Size::Large), &theme, |_| glyphs());
+        assert_eq!(layout.label_count(), 0, "labels from the old font must not survive");
     }
 }

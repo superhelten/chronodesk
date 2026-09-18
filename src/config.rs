@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::app::{Mode, Size};
 use crate::clock::ClockFormat;
 use crate::layout::Font;
+use crate::market::Market;
 use crate::night::{NightMode, TimeOfDay};
-use crate::theme::Palette;
+use crate::theme::{self, Palette};
 
 /// Bump when the meaning of a field changes; add a migration step for it.
 /// Schema 0 is eframe's own persistence file, handled by [`migrate_from_eframe`].
@@ -33,7 +34,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_TIMER_MINUTES: u64 = 24 * 60;
 /// Night mode may fade the readout to this alpha and no further: below it the
 /// halo no longer buys enough contrast over a bright background.
-pub const MIN_NIGHT_DIM: f32 = 0.6;
+pub const MIN_NIGHT_DIM: f32 = theme::TEXT_ALPHA_FLOOR;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowPos {
@@ -66,6 +67,9 @@ pub struct Config {
     pub night_to: TimeOfDay,
     /// Factor the readout is faded by at night, `MIN_NIGHT_DIM..=1.0`.
     pub night_dim: f32,
+    /// The market board's rows, top to bottom, by id (`"new-york"`, …).
+    /// Never empty: a board with no rows is a mode that shows nothing.
+    pub markets: Vec<Market>,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -90,6 +94,7 @@ impl Default for Config {
             night_from: TimeOfDay::new(22, 0).expect("valid"),
             night_to: TimeOfDay::new(7, 0).expect("valid"),
             night_dim: 0.7,
+            markets: Market::DEFAULT.to_vec(),
             window: None,
         }
     }
@@ -114,6 +119,19 @@ impl Config {
             warnings.push(format!("'night_dim' {} out of range; clamped to {dim}", self.night_dim));
             self.night_dim = dim;
         }
+        let mut seen = Vec::with_capacity(self.markets.len());
+        for market in std::mem::take(&mut self.markets) {
+            if seen.contains(&market) {
+                warnings.push(format!("'markets' lists '{}' twice; keeping the first", market.id()));
+            } else {
+                seen.push(market);
+            }
+        }
+        if seen.is_empty() {
+            warnings.push("'markets' is empty; using the default board".to_owned());
+            seen = Market::DEFAULT.to_vec();
+        }
+        self.markets = seen;
         self.schema_version = SCHEMA_VERSION;
         self
     }
@@ -222,6 +240,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "night_from", &mut config.night_from, &mut warnings);
     field(&mut fields, "night_to", &mut config.night_to, &mut warnings);
     field(&mut fields, "night_dim", &mut config.night_dim, &mut warnings);
+    markets_field(&mut fields, &mut config.markets, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -290,6 +309,31 @@ fn field<T: DeserializeOwned>(
         Ok(value) => *out = value,
         Err(err) => warnings.push(format!("'{key}' is invalid ({err}); using default")),
     }
+}
+
+/// The market list is tolerant per *element*: one misspelt id drops that row
+/// with a warning and keeps the others, the way one bad field keeps the rest
+/// of the file. Only a value that is not a list of strings at all falls back
+/// wholesale.
+fn markets_field(fields: &mut HashMap<String, Value>, out: &mut Vec<Market>, warnings: &mut Vec<String>) {
+    let Some(value) = fields.remove("markets") else {
+        return;
+    };
+    let ids = match value.into_rust::<Vec<String>>() {
+        Ok(ids) => ids,
+        Err(err) => {
+            warnings.push(format!("'markets' is invalid ({err}); using default"));
+            return;
+        }
+    };
+    let mut markets = Vec::with_capacity(ids.len());
+    for id in ids {
+        match Market::from_id(&id) {
+            Some(market) => markets.push(market),
+            None => warnings.push(format!("'markets' names an unknown exchange '{id}'; skipped")),
+        }
+    }
+    *out = markets;
 }
 
 fn quarantine(path: &Path, warnings: &mut Vec<String>) -> Option<PathBuf> {
@@ -660,6 +704,60 @@ mod tests {
         let loaded = load(&path);
         assert_eq!(loaded.config.night_dim, 0.75);
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn config_without_markets_gets_the_default_board() {
+        let dir = Dir::new("markets_default");
+        let path = dir.file();
+        write(&path, "(schema_version:1,mode:\"market\")");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.mode, Mode::Market);
+        assert_eq!(loaded.config.markets, Market::DEFAULT.to_vec());
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn markets_round_trip_as_a_list_of_ids_in_the_users_order() {
+        let dir = Dir::new("markets_roundtrip");
+        let path = dir.file();
+        let config = Config { markets: vec![Market::Tokyo, Market::Oslo, Market::NewYork], ..Default::default() };
+        save(&path, &config).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"tokyo\""), "{text}");
+        assert!(text.contains("\"new-york\""), "{text}");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.markets, config.markets, "hand-set order must survive");
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    /// One misspelt exchange drops that row, not the list, and a duplicate
+    /// is collapsed; an empty or unusable list falls back to the default.
+    #[test]
+    fn markets_are_tolerant_per_element() {
+        let dir = Dir::new("markets_bad");
+        let path = dir.file();
+        write(&path, "(schema_version:1,markets:[\"oslo\",\"atlantis\",\"tokyo\",\"oslo\"],chroma:true)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.markets, vec![Market::Oslo, Market::Tokyo]);
+        assert!(loaded.config.chroma, "other fields survive");
+        assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+        assert!(loaded.warnings[0].contains("atlantis"), "{:?}", loaded.warnings);
+        assert!(loaded.warnings[1].contains("twice"), "{:?}", loaded.warnings);
+
+        write(&path, "(schema_version:1,markets:[])");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.markets, Market::DEFAULT.to_vec());
+        assert!(loaded.warnings[0].contains("empty"), "{:?}", loaded.warnings);
+
+        write(&path, "(schema_version:1,markets:\"oslo\")");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.markets, Market::DEFAULT.to_vec());
+        assert!(loaded.warnings[0].contains("invalid"), "{:?}", loaded.warnings);
+
+        write(&path, "(schema_version:1,markets:[\"atlantis\"])");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.markets, Market::DEFAULT.to_vec(), "nothing usable falls back to the default");
     }
 
     #[test]

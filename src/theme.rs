@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::serde_by_id;
 
+/// Readout text is never faded below this alpha in normal use (requirement
+/// T6): under it the halo no longer buys enough contrast over a bright
+/// background. Night dimming and caption dimming both stop here, including
+/// when they stack.
+pub const TEXT_ALPHA_FLOOR: f32 = 0.6;
+
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Theme {
     pub color: Colors,
@@ -80,7 +86,9 @@ serde_by_id!(Palette, "palette");
 impl Theme {
     /// The theme to draw with: a preset, optionally dimmed for night mode.
     /// `night_dim` is the factor applied to the readout colours (1.0 = none).
-    pub fn resolve(palette: Palette, night_dim: Option<f32>) -> Self {
+    /// Under a chroma key the open dot takes the text colour: a green dot
+    /// over `#00FF00` is exactly what a keyer is told to remove.
+    pub fn resolve(palette: Palette, night_dim: Option<f32>, chroma: bool) -> Self {
         let mut theme = Self::default();
         let c = &mut theme.color;
         (c.text, c.alert) = match palette {
@@ -89,11 +97,32 @@ impl Theme {
             Palette::Cool => (Color32::from_rgb(200, 228, 255), Color32::from_rgb(255, 170, 60)),
             Palette::Amber => (Color32::from_rgb(245, 180, 60), Color32::from_rgb(240, 80, 70)),
         };
+        if chroma {
+            c.open = c.text;
+        }
         if let Some(dim) = night_dim.filter(|d| *d < 1.0) {
             c.text = c.text.gamma_multiply(dim);
             c.alert = c.alert.gamma_multiply(dim);
+            c.open = c.open.gamma_multiply(dim);
         }
         theme
+    }
+
+    /// `color` faded by `factor`, but never below [`TEXT_ALPHA_FLOOR`]: a
+    /// caption dimmed on top of night mode must still clear the floor. The
+    /// factor is raised rather than the alpha clamped, because `Color32` is
+    /// premultiplied and clamping one channel would wash the colour out.
+    pub fn dim(color: Color32, factor: f32) -> Color32 {
+        let alpha = f32::from(color.a()) / 255.0;
+        if alpha <= TEXT_ALPHA_FLOOR {
+            return color;
+        }
+        color.gamma_multiply(factor.max(TEXT_ALPHA_FLOOR / alpha).min(1.0))
+    }
+
+    /// A caption or a closed board row over a backdrop.
+    pub fn dim_caption(&self, color: Color32) -> Color32 {
+        Self::dim(color, self.color.caption_dim)
     }
 }
 
@@ -104,6 +133,8 @@ pub struct Colors {
     pub caption_dim: f32,
     /// Timer that has run out.
     pub alert: Color32,
+    /// The dot beside a market that is trading right now.
+    pub open: Color32,
     /// Per-copy alpha of the two halo rings. They overlap, hence the low values:
     /// measured over pure white the halo lands near #464646, ~9:1 to the glyph.
     pub halo: [u8; 2],
@@ -139,6 +170,17 @@ pub struct Ratios {
     pub control_gap: f32,
     pub control_disc: f32,
     pub control_inset: f32,
+    /// Market board: the row time as a fraction of the main font, with a
+    /// floor in points so the smallest size stays legible (requirement L4).
+    pub board_time: f32,
+    pub board_time_min: f32,
+    /// Row pitch as a multiple of the row font size.
+    pub board_pitch: f32,
+    /// Caption-relative: the gap between columns, the status dot's radius
+    /// and the ring stroke of a closed market.
+    pub board_gap: f32,
+    pub board_dot: f32,
+    pub board_ring: f32,
 }
 
 impl Default for Colors {
@@ -147,6 +189,7 @@ impl Default for Colors {
             text: Color32::from_rgb(242, 242, 240),
             caption_dim: 0.62,
             alert: Color32::from_rgb(245, 165, 36),
+            open: Color32::from_rgb(88, 214, 122),
             halo: [34, 22],
             halo_stroke: 160,
             backdrop: Color32::from_rgba_premultiplied(8, 8, 10, 178),
@@ -176,6 +219,12 @@ impl Default for Ratios {
             control_gap: 0.9,
             control_disc: 0.78,
             control_inset: 0.22,
+            board_time: 0.5,
+            board_time_min: 16.0,
+            board_pitch: 1.45,
+            board_gap: 0.9,
+            board_dot: 0.28,
+            board_ring: 0.12,
         }
     }
 }
@@ -198,15 +247,15 @@ mod tests {
 
     #[test]
     fn the_default_palette_is_the_measured_look() {
-        assert_eq!(Theme::resolve(Palette::Default, None), Theme::default());
-        assert_eq!(Theme::resolve(Palette::Default, Some(1.0)), Theme::default());
+        assert_eq!(Theme::resolve(Palette::Default, None, false), Theme::default());
+        assert_eq!(Theme::resolve(Palette::Default, Some(1.0), false), Theme::default());
     }
 
     #[test]
     fn every_palette_keeps_the_contrast_and_keying_tokens() {
         let base = Theme::default();
         for palette in Palette::ALL {
-            let t = Theme::resolve(palette, None);
+            let t = Theme::resolve(palette, None, false);
             assert_eq!(t.color.chroma, base.color.chroma, "{palette:?} must not touch the key colour");
             assert_eq!(t.color.halo, base.color.halo, "{palette:?}");
             assert_eq!(t.color.backdrop, base.color.backdrop, "{palette:?}");
@@ -227,7 +276,7 @@ mod tests {
 
     #[test]
     fn palettes_differ_in_text_colour() {
-        let texts: Vec<_> = Palette::ALL.iter().map(|&p| Theme::resolve(p, None).color.text).collect();
+        let texts: Vec<_> = Palette::ALL.iter().map(|&p| Theme::resolve(p, None, false).color.text).collect();
         for (i, a) in texts.iter().enumerate() {
             for b in &texts[i + 1..] {
                 assert_ne!(a, b, "two presets share a text colour");
@@ -237,14 +286,62 @@ mod tests {
 
     #[test]
     fn night_dim_fades_the_readout_and_nothing_else() {
-        let base = Theme::resolve(Palette::Default, None);
-        let dim = Theme::resolve(Palette::Default, Some(0.7));
+        let base = Theme::resolve(Palette::Default, None, false);
+        let dim = Theme::resolve(Palette::Default, Some(0.7), false);
         assert!(dim.color.text.a() < base.color.text.a());
         assert!(dim.color.alert.a() < base.color.alert.a());
+        assert!(dim.color.open.a() < base.color.open.a(), "the open dot is part of the readout");
         assert_eq!(dim.color.chroma, base.color.chroma);
         assert_eq!(dim.color.backdrop, base.color.backdrop);
         assert_eq!(dim.color.halo, base.color.halo);
         assert_eq!(dim.color.control_glyph, base.color.control_glyph);
+    }
+
+    /// Caption dimming alone sits just above the floor; stacked on night
+    /// mode it would fall to 0.43, so the floor has to hold it up.
+    #[test]
+    fn dimming_never_falls_below_the_alpha_floor() {
+        let floor = (TEXT_ALPHA_FLOOR * 255.0) as u8;
+        let base = Theme::resolve(Palette::Default, None, false);
+        let plain = base.dim_caption(base.color.text);
+        assert!(plain.a() >= floor && plain.a() < base.color.text.a(), "alpha {}", plain.a());
+
+        let night = Theme::resolve(Palette::Default, Some(0.7), false);
+        let stacked = night.dim_caption(night.color.text);
+        assert!(stacked.a() >= floor, "stacked alpha {} is under the floor {floor}", stacked.a());
+        assert!(stacked.a() <= night.color.text.a(), "dimming must never brighten");
+
+        // Already at the floor: left exactly alone.
+        let at_floor = Theme::resolve(Palette::Default, Some(TEXT_ALPHA_FLOOR), false);
+        assert_eq!(at_floor.dim_caption(at_floor.color.text), at_floor.color.text);
+        // Premultiplied colour keeps its hue: every channel scales together.
+        let warm = Theme::resolve(Palette::Warm, None, false);
+        let dimmed = warm.dim_caption(warm.color.text);
+        let ratio = f32::from(dimmed.r()) / f32::from(warm.color.text.r());
+        assert!((f32::from(dimmed.b()) / f32::from(warm.color.text.b()) - ratio).abs() < 0.02);
+    }
+
+    /// A keyer removes everything near `#00FF00`, so the trading dot must
+    /// not be green over a chroma background.
+    #[test]
+    fn under_chroma_the_open_dot_is_not_green() {
+        let plain = Theme::resolve(Palette::Default, None, false);
+        let keyed = Theme::resolve(Palette::Default, None, true);
+        assert_ne!(plain.color.open, plain.color.text);
+        assert_eq!(keyed.color.open, keyed.color.text);
+        assert_eq!(keyed.color.chroma, plain.color.chroma);
+    }
+
+    #[test]
+    fn the_floor_matches_the_config_clamp() {
+        assert_eq!(crate::config::MIN_NIGHT_DIM, TEXT_ALPHA_FLOOR);
+    }
+
+    #[test]
+    fn board_ratios_keep_the_row_legible() {
+        let r = Ratios::default();
+        assert!(r.board_time_min >= 16.0, "row digits must clear the L4 floor at the smallest size");
+        assert!(r.board_pitch > 1.0, "rows must not overlap");
     }
 
     #[test]

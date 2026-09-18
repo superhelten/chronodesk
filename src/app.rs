@@ -8,14 +8,16 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::board;
 use crate::clock::{ClockStyle, clock_readout};
 use crate::config::{self, Config};
 use crate::digital;
 use crate::instrument::{Cause, Instrument};
-use crate::layout::{DerivedLayout, Font, Glyph, LayoutKey, Metrics};
+use crate::layout::{DerivedLayout, Font, LayoutKey, Metrics};
+use crate::market::{self, BoardStyle, Market};
 use crate::night::{self, Schedule};
 use crate::placement;
-use crate::text::{display_family, install_display_font, measure_glyphs, paint_galley, spaced};
+use crate::text::{display_family, install_display_font, measure_glyphs, paint_galley, paint_readout, spaced};
 use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
@@ -41,10 +43,12 @@ pub enum Mode {
     Clock,
     Stopwatch,
     Timer,
+    /// The market board: one row per exchange, in its local time.
+    Market,
 }
 
 impl Mode {
-    pub const ALL: [Self; 3] = [Self::Clock, Self::Stopwatch, Self::Timer];
+    pub const ALL: [Self; 4] = [Self::Clock, Self::Stopwatch, Self::Timer, Self::Market];
 
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|m| m.id().eq_ignore_ascii_case(id))
@@ -55,6 +59,7 @@ impl Mode {
             Self::Clock => "clock",
             Self::Stopwatch => "stopwatch",
             Self::Timer => "timer",
+            Self::Market => "market",
         }
     }
 
@@ -63,7 +68,14 @@ impl Mode {
             Self::Clock => "Clock",
             Self::Stopwatch => "Stopwatch",
             Self::Timer => "Timer",
+            Self::Market => "Markets",
         }
+    }
+
+    /// Whether start/pause and reset mean anything: only the two modes
+    /// that run something have hover controls and menu actions.
+    pub fn has_controls(self) -> bool {
+        matches!(self, Self::Stopwatch | Self::Timer)
     }
 }
 
@@ -348,15 +360,16 @@ impl ChronoApp {
                 self.countdown.set_duration(minutes(s.timer_minutes));
             }
             Command::StartPause => match s.mode {
-                Mode::Clock => {}
+                Mode::Clock | Mode::Market => {}
                 Mode::Stopwatch => self.stopwatch.toggle(now),
                 Mode::Timer => self.countdown.toggle(now),
             },
             Command::Reset => match s.mode {
-                Mode::Clock => {}
+                Mode::Clock | Mode::Market => {}
                 Mode::Stopwatch => self.stopwatch.reset(),
                 Mode::Timer => self.countdown.reset(),
             },
+            Command::ToggleMarket(market) => toggle_market(&mut s.markets, market),
             Command::SetSize(size) => s.size = size,
             Command::ToggleFont => s.font = s.font.toggled(),
             Command::ToggleBackdrop => s.backdrop = !s.backdrop,
@@ -389,6 +402,7 @@ impl ChronoApp {
                 (Key::Num1, Command::SetMode(Mode::Clock)),
                 (Key::Num2, Command::SetMode(Mode::Stopwatch)),
                 (Key::Num3, Command::SetMode(Mode::Timer)),
+                (Key::Num4, Command::SetMode(Mode::Market)),
             ]
             .into_iter()
             .filter(|(key, _)| i.key_pressed(*key))
@@ -449,6 +463,7 @@ impl ChronoApp {
             show_date: s.show_date,
             palette: s.palette,
             night: s.night,
+            markets: s.markets.clone(),
             always_on_top: s.always_on_top,
         }
     }
@@ -459,34 +474,40 @@ impl ChronoApp {
         let s = &self.settings;
         let schedule = Schedule { from: s.night_from, to: s.night_to };
         let (dim, wake) = night::resolve(s.night, schedule, s.night_dim, local.time());
-        self.theme = Theme::resolve(s.palette, dim);
+        self.theme = Theme::resolve(s.palette, dim, s.chroma);
         wake
     }
 
-    /// Big readout, small caption line, colour, and when the display next changes.
+    /// What to draw above the caption line, the caption, and when the display
+    /// next changes.
     fn readout(&self, now: Instant, local: DateTime<Local>) -> Readout {
         let s = &self.settings;
         let c = &self.theme.color;
+        let line = |main: String, caption: String, color: Color32, next_change: Option<Duration>| Readout {
+            scene: Scene::Line { main, color },
+            caption,
+            next_change,
+        };
         match s.mode {
             Mode::Clock => {
                 let style = ClockStyle { format: s.clock_format, show_seconds: s.show_seconds, show_date: s.show_date };
                 let clock = clock_readout(local, style);
-                Readout {
-                    main: clock.main,
-                    caption: clock.caption,
-                    color: c.text,
-                    next_change: Some(clock.until_change),
-                }
+                line(clock.main, clock.caption, c.text, Some(clock.until_change))
+            }
+            Mode::Market => {
+                let style = BoardStyle { format: s.clock_format, show_seconds: s.show_seconds };
+                let board = market::board(local.naive_utc(), &s.markets, style);
+                Readout { scene: Scene::Board(board.rows), caption: board.caption, next_change: Some(board.until_change) }
             }
             Mode::Stopwatch => {
                 let elapsed = self.stopwatch.elapsed(now);
                 let running = self.stopwatch.is_running();
-                Readout {
-                    main: timer::format_stopwatch(elapsed),
-                    caption: if running || elapsed.is_zero() { "STOPWATCH" } else { "PAUSED" }.into(),
-                    color: c.text,
-                    next_change: running.then(|| timer::next_stopwatch_tick(elapsed)),
-                }
+                line(
+                    timer::format_stopwatch(elapsed),
+                    if running || elapsed.is_zero() { "STOPWATCH" } else { "PAUSED" }.into(),
+                    c.text,
+                    running.then(|| timer::next_stopwatch_tick(elapsed)),
+                )
             }
             Mode::Timer => {
                 let cd = &self.countdown;
@@ -496,12 +517,12 @@ impl ChronoApp {
                     let lit = !blinking || over.as_millis() % 1000 < 600;
                     let into = (over.as_millis() % 1000) as u64;
                     let next = if into < 600 { 600 - into } else { 1000 - into };
-                    Readout {
-                        main: timer::format_countdown(remaining),
-                        caption: "TIME'S UP".into(),
-                        color: if lit { c.alert } else { c.alert.gamma_multiply(0.25) },
-                        next_change: blinking.then(|| Duration::from_millis(next)),
-                    }
+                    line(
+                        timer::format_countdown(remaining),
+                        "TIME'S UP".into(),
+                        if lit { c.alert } else { c.alert.gamma_multiply(0.25) },
+                        blinking.then(|| Duration::from_millis(next)),
+                    )
                 } else {
                     let running = cd.is_running(now);
                     let caption = if running {
@@ -511,23 +532,48 @@ impl ChronoApp {
                     } else {
                         "PAUSED".to_owned()
                     };
-                    Readout {
-                        main: timer::format_countdown(remaining),
+                    line(
+                        timer::format_countdown(remaining),
                         caption,
-                        color: c.text,
-                        next_change: running.then(|| timer::next_countdown_tick(remaining)),
-                    }
+                        c.text,
+                        running.then(|| timer::next_countdown_tick(remaining)),
+                    )
                 }
             }
         }
     }
 }
 
+/// What sits above the caption line.
+enum Scene {
+    /// One big readout line.
+    Line { main: String, color: Color32 },
+    /// The market board, one row per exchange.
+    Board(Vec<market::Row>),
+}
+
 struct Readout {
-    main: String,
+    scene: Scene,
     caption: String,
-    color: Color32,
     next_change: Option<Duration>,
+}
+
+/// Adds or removes a market, keeping the list in catalogue order around any
+/// order the user set by hand, and never emptying it: a board with no rows
+/// would be a mode that shows nothing.
+fn toggle_market(markets: &mut Vec<Market>, market: Market) {
+    if let Some(i) = markets.iter().position(|&m| m == market) {
+        if markets.len() > 1 {
+            markets.remove(i);
+        }
+        return;
+    }
+    // After the last row that precedes it in the catalogue: a list in
+    // catalogue order stays in catalogue order, and a hand-set order is
+    // disturbed as little as possible.
+    let rank = |m: Market| Market::ALL.iter().position(|&x| x == m).unwrap_or(usize::MAX);
+    let at = markets.iter().rposition(|&m| rank(m) < rank(market)).map_or(0, |i| i + 1);
+    markets.insert(at, market);
 }
 
 impl eframe::App for ChronoApp {
@@ -576,32 +622,41 @@ impl eframe::App for ChronoApp {
         // the font atlas; the digital face is pure geometry.
         let theme = self.theme;
         let key = LayoutKey::new(s.size, ctx.pixels_per_point(), s.font);
-        self.layout.ensure(key, &theme, |metrics| match s.font {
-            Font::Sans => measure_glyphs(&ctx, metrics.font),
-            Font::Digital => digital::glyphs(metrics.font, &theme.segments),
+        self.layout.ensure(key, &theme, |font| match s.font {
+            Font::Sans => measure_glyphs(&ctx, font),
+            Font::Digital => digital::glyphs(font, &theme.segments),
         });
         let m = *self.layout.metrics();
-        // A backdrop already separates the text from whatever is behind it.
-        let halo = (s.text_outline && !s.backdrop).then_some(m.halo_width);
+        // A backdrop already separates the text from whatever is behind it,
+        // and under a chroma key a dark rim would only leave a fringe once
+        // the green is keyed out (requirement T3).
+        let halo = (s.text_outline && !s.backdrop && !s.chroma).then_some(m.halo_width);
 
-        let main_width = self.layout.width_of(&readout.main);
-        let main_height = self.layout.glyphs().height;
+        // Every small label — the caption, city names, AM/PM — is set the
+        // same way: caption size, letter-spaced, in the typeface.
+        let caption_font = FontId::new(m.caption_font, display_family());
+        let lay = |text: &str| painter.layout_no_wrap(spaced(text), caption_font.clone(), theme.color.text);
+
         // An empty caption (clock without date) gives its line back to the
         // window; the hover controls only exist outside clock mode, so
         // nothing else needs that line.
-        let caption_galley = (!readout.caption.is_empty()).then(|| {
-            let font = FontId::new(m.caption_font, display_family());
-            let text = spaced(&readout.caption);
-            let painter = painter.clone();
-            self.layout.caption_galley(&readout.caption, m.caption_font, move || {
-                painter.layout_no_wrap(text, font, theme.color.text)
-            })
-        });
+        let caption_galley = (!readout.caption.is_empty())
+            .then(|| self.layout.caption_galley(&readout.caption, m.caption_font, || lay(&readout.caption)));
         let caption_width = caption_galley.as_ref().map_or(0.0, |g| g.size().x);
         let caption_height = if caption_galley.is_some() { m.caption_height } else { 0.0 };
+
+        // The board reserves the caption line for the longest countdown it
+        // can show, so its window is sized once rather than every minute.
+        let (scene_size, geometry) = match &readout.scene {
+            Scene::Line { main, .. } => (vec2(self.layout.width_of(main), self.layout.glyphs().height), None),
+            Scene::Board(rows) => {
+                let geo = board::measure(&mut self.layout, rows, &lay);
+                (vec2(geo.size.x.max(geo.caption_min_width), geo.size.y), Some(geo))
+            }
+        };
         let theme = &theme;
 
-        let content = vec2(main_width.max(caption_width), main_height + caption_height);
+        let content = vec2(scene_size.x.max(caption_width), scene_size.y + caption_height);
         let window_size = (content + m.pad * 2.0).ceil();
         self.fit_window(&ctx, window_size);
 
@@ -623,43 +678,39 @@ impl eframe::App for ChronoApp {
             painter.rect_stroke(rect.shrink(0.5), m.corner, stroke, StrokeKind::Inside);
         }
 
-        let main_origin = pos2(rect.center().x - main_width / 2.0, rect.top() + m.pad.y);
-        let mut x = main_origin.x;
-        for c in readout.main.chars() {
-            let cell = self.layout.cell_width(c);
-            match self.layout.glyph(c) {
-                Some(Glyph::Text(galley)) => {
-                    let pos = pos2(x + (cell - galley.size().x) / 2.0, main_origin.y);
-                    paint_galley(&painter, pos, galley.clone(), readout.color, halo, theme);
-                }
-                // Already laid out inside its cell.
-                Some(Glyph::Digital(polygons)) => {
-                    digital::paint(&painter, pos2(x, main_origin.y), polygons, readout.color, halo, theme);
-                }
-                None => {}
+        // Dimming over a halo would eat the contrast the halo just bought, so
+        // captions and closed rows are only faded when there is none; and a
+        // chroma key wants opaque text, since anything translucent keys as a
+        // green tint.
+        let dim_captions = halo.is_none() && !s.chroma;
+        let scene_top = rect.top() + m.pad.y;
+        let caption_color = match &readout.scene {
+            Scene::Line { main, color } => {
+                let origin = pos2(rect.center().x - scene_size.x / 2.0, scene_top);
+                paint_readout(&painter, origin, main, self.layout.glyphs(), *color, halo, theme);
+                if *color == theme.color.text && dim_captions { theme.dim_caption(*color) } else { *color }
             }
-            x += cell;
-        }
+            Scene::Board(rows) => {
+                let geo = geometry.expect("measured with the board");
+                let origin = pos2(rect.center().x - geo.size.x / 2.0, scene_top);
+                board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, halo, dim_captions, &lay);
+                if dim_captions { theme.dim_caption(theme.color.text) } else { theme.color.text }
+            }
+        };
 
         let caption_rect = Rect::from_min_size(
-            pos2(rect.left(), main_origin.y + main_height),
+            pos2(rect.left(), scene_top + scene_size.y),
             vec2(rect.width(), caption_height),
         );
-        let show_controls = hovered && s.mode != Mode::Clock;
+        let show_controls = hovered && s.mode.has_controls();
         let mut pending = None;
         if show_controls {
             pending = controls(ui, caption_rect, &m, theme, self.menu_state(now).start_label);
         } else if let Some(caption_galley) = caption_galley {
             let pos = caption_rect.center() - caption_galley.size() / 2.0;
-            // Dimming the caption over a halo would eat the contrast the halo
-            // just bought, so only dim it when there is a backdrop.
-            let color = match (readout.color == theme.color.text, halo) {
-                (true, None) => theme.color.text.gamma_multiply(theme.color.caption_dim),
-                _ => readout.color,
-            };
             // The caption is far smaller, so it gets the thinnest ring that
             // still separates it from the background.
-            paint_galley(&painter, pos, caption_galley, color, halo.map(|_| 1.0), theme);
+            paint_galley(&painter, pos, caption_galley, caption_color, halo.map(|_| 1.0), theme);
         }
         if let Some(cmd) = pending {
             self.apply(cmd, &ctx, now);
@@ -808,4 +859,47 @@ fn strip_window_chrome(_frame: &eframe::Frame) {}
 
 fn minutes(min: u64) -> Duration {
     Duration::from_secs(min * 60)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_ids_round_trip() {
+        for mode in Mode::ALL {
+            assert_eq!(Mode::from_id(mode.id()), Some(mode));
+        }
+        assert_eq!(Mode::from_id("market"), Some(Mode::Market));
+    }
+
+    /// A menu toggle slots the exchange in at its catalogue position among
+    /// whatever order the user set by hand, and removes it in place.
+    #[test]
+    fn toggling_a_market_keeps_the_users_order_around_it() {
+        let mut markets = vec![Market::Tokyo, Market::NewYork, Market::Sydney];
+        toggle_market(&mut markets, Market::London);
+        assert_eq!(markets, vec![Market::Tokyo, Market::NewYork, Market::London, Market::Sydney]);
+        toggle_market(&mut markets, Market::NewYork);
+        assert_eq!(markets, vec![Market::Tokyo, Market::London, Market::Sydney]);
+        toggle_market(&mut markets, Market::Oslo);
+        assert_eq!(markets, vec![Market::Tokyo, Market::London, Market::Oslo, Market::Sydney]);
+    }
+
+    #[test]
+    fn the_last_market_cannot_be_removed() {
+        let mut markets = vec![Market::Oslo];
+        toggle_market(&mut markets, Market::Oslo);
+        assert_eq!(markets, vec![Market::Oslo]);
+    }
+
+    #[test]
+    fn toggling_from_the_default_board_appends_in_catalogue_order() {
+        let mut markets = Market::DEFAULT.to_vec();
+        toggle_market(&mut markets, Market::HongKong);
+        assert_eq!(
+            markets,
+            vec![Market::NewYork, Market::London, Market::Oslo, Market::HongKong, Market::Tokyo, Market::Sydney]
+        );
+    }
 }

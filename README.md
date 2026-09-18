@@ -19,10 +19,11 @@ Requires Rust 1.95+ (eframe 0.36).
 | Menu | Right-click the overlay, or right-click the tray icon (same menu) |
 | Lock / unlock click-through | **Left-click the tray icon** (or menu → *Locked*). The icon turns amber while locked |
 | Start / pause, reset | Hover the overlay in Stopwatch/Timer mode, or `Space` / `R` when focused |
-| Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer |
+| Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer · `4` Markets |
 | Timer duration | Menu → *Timer duration*, or scroll over an idle timer (±1 min per notch) |
+| Market board | Mode *Markets*: one row per exchange with its local time and a status dot (filled green = trading, amber = midday break, hollow = closed), and the next open or close across the board on the caption line. Menu → *Exchanges* picks the rows |
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
-| Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop) |
+| Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop). Off under a backdrop or a chroma key, where a dark rim would only leave a fringe once the green is keyed out |
 | 12-hour clock, date line | Menu → *Appearance* → *12-hour clock*, *Show date*. AM/PM sits on the caption line; with the date hidden the overlay shrinks to the time alone |
 | Digital font | Menu → *Appearance* → *Digital font*: seven-segment digits drawn as polygons, no font file involved. The caption stays in the typeface, like the printed labels on a real display |
 | Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool or Amber. Only the readout colours change; halo, backdrop and controls keep their contrast |
@@ -31,10 +32,28 @@ Requires Rust 1.95+ (eframe 0.36).
 While locked the overlay ignores the mouse entirely, so the tray icon is the way back.
 Locking is disabled if the tray icon could not be created, and the app always starts unlocked.
 
+### Market board
+
+Nine exchanges are built in, west to east: New York (NYSE), London (LSE), Oslo (Euronext Oslo),
+Frankfurt (Xetra), Mumbai (NSE), Shanghai (SSE), Hong Kong (HKEX), Tokyo (TSE) and Sydney (ASX).
+The default board shows New York, London, Oslo, Tokyo and Sydney. Rows follow the 12/24-hour and
+*Show seconds* settings; without seconds the board redraws once a minute.
+
+Everything is computed locally, with no network and no time-zone database: each exchange is a
+fixed offset plus one of three daylight-saving rules (US, EU, Australia), and a regular
+Monday–Friday session with the midday break where there is one (Shanghai, Hong Kong, Tokyo).
+Oslo's close is taken as 16:30, the end of the closing auction. Holidays and half-day closes
+are **not** modelled: on a public holiday the dot is green when it shouldn't be. Should a
+jurisdiction change its daylight-saving law, the rule in `src/tz.rs` changes with a rebuild,
+exactly as a bundled database would.
+
+Columns are sized for their widest possible values (two-digit hours, the longest countdown any
+listed exchange can produce), so the window never resizes as the clocks tick.
+
 ## Configuration
 
 Settings (mode, timer length, size, font, backdrop, chroma, seconds, clock format, date line, colours,
-night mode and its schedule, always-on-top) and the window position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
+night mode and its schedule, the market board's rows, always-on-top) and the window position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
 on macOS), about 1.5 s after the last change and again on exit. The file is meant to be
 readable and hand-editable. Setting `CHRONODESK_CONFIG` to a path names the file outright,
 which is how the test scripts stay out of the config you actually use.
@@ -50,6 +69,11 @@ The app owns this file rather than using eframe's persistence, to get two proper
 Only a file that cannot be parsed at all, or one written by a newer `schema_version`, is
 rejected; it is copied to `app.ron.bak` first. Files from the older eframe layout are migrated
 automatically.
+
+`markets` is a list of exchange ids in display order (`["new-york", "london", "oslo", "tokyo", "sydney"]`),
+tolerant per element: a misspelt id drops that row with a warning, a duplicate is collapsed, and an
+empty list falls back to the default board. The *Exchanges* menu adds a row at its catalogue position
+among whatever order the file holds, and never removes the last one.
 
 ### Window placement
 
@@ -111,6 +135,9 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/app.rs` – state, rendering, window sizing, repaint scheduling
 - `src/theme.rs` – visual tokens: colours, alphas and proportions
 - `src/layout.rs` – derived state: metrics and glyph measurements, rebuilt only when the size or display scale changes
+- `src/market.rs` – the exchange catalogue, sessions and the board readout as a pure function of UTC (unit-tested)
+- `src/tz.rs` – time zones as a fixed offset plus a daylight-saving rule, computed locally (unit-tested)
+- `src/board.rs` – the board's column geometry and painting
 - `src/config.rs` – the config file: atomic saves, field-tolerant loading
 - `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`
@@ -120,6 +147,7 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 ## Performance notes
 
 - Repaints only when the display changes: 1 frame/s for the clock (landing just after each second),
-  10 frames/s for a running stopwatch, none while paused. Idle CPU is below Windows' accounting resolution.
+  10 frames/s for a running stopwatch, none while paused, and one a minute for the market board with
+  seconds hidden. Idle CPU is below Windows' accounting resolution.
 - Memory: ~40 MB private working set / ~65 MB private bytes, almost all of it the graphics driver.
   glow was chosen after measuring: wgpu used 130–310 MB private working set.

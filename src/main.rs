@@ -1,18 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod board;
 mod clock;
 mod config;
 mod digital;
 mod icon;
 mod instrument;
 mod layout;
+mod market;
 mod night;
 mod placement;
 mod text;
 mod theme;
 mod timer;
 mod tray;
+mod tz;
 
 use eframe::egui;
 

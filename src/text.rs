@@ -1,13 +1,15 @@
 //! The typeface face: the readout and caption drawn with a font.
 //!
-//! Everything here is the only code that touches egui's font atlas. The
-//! digital face (`digital.rs`) never does, which is what keeps a face switch
-//! a plain layout rebuild rather than a font reload.
+//! `install_display_font` and `measure_glyphs` are the only code that touches
+//! egui's font atlas. The digital face (`digital.rs`) never does, which is
+//! what keeps a face switch a plain layout rebuild rather than a font reload.
+//! `paint_readout` draws whichever face the cache holds.
 
 use std::sync::Arc;
 
-use eframe::egui::{self, Color32, FontFamily, FontId, Galley, Pos2, vec2};
+use eframe::egui::{self, Color32, FontFamily, FontId, Galley, Pos2, pos2, vec2};
 
+use crate::digital;
 use crate::layout::{self, Glyph, Glyphs};
 use crate::theme::Theme;
 
@@ -91,6 +93,36 @@ pub fn paint_galley(
         }
     }
     painter.galley_with_override_text_color(pos, galley, color);
+}
+
+/// Draws a readout line from cached glyphs, its top-left corner at `origin`.
+/// Every character sits in its cell, so the line's width is `glyphs.width_of`
+/// and nothing is measured here.
+pub fn paint_readout(
+    painter: &egui::Painter,
+    origin: Pos2,
+    text: &str,
+    glyphs: &Glyphs,
+    color: Color32,
+    halo: Option<f32>,
+    theme: &Theme,
+) {
+    let mut x = origin.x;
+    for c in text.chars() {
+        let cell = glyphs.cell_width(c);
+        match glyphs.glyph(c) {
+            Some(Glyph::Text(galley)) => {
+                let pos = pos2(x + (cell - galley.size().x) / 2.0, origin.y);
+                paint_galley(painter, pos, galley.clone(), color, halo, theme);
+            }
+            // Already laid out inside its cell.
+            Some(Glyph::Digital(polygons)) => {
+                digital::paint(painter, pos2(x, origin.y), polygons, color, halo, theme);
+            }
+            None => {}
+        }
+        x += cell;
+    }
 }
 
 /// Letter-spaced caption ("T I M E R"-lite): thin spaces read cleaner at small sizes.

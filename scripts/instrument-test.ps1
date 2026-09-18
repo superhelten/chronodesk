@@ -212,6 +212,67 @@ try {
   $nightIdle = Send "stats"
   $results += Check "night auto, stopwatch paused: no timed frames" ((Field $nightIdle 'tick') -eq 0) $nightIdle
 
+  # --- J: the market board ----------------------------------------------------
+  # Mode is outside the layout key (both faces are measured on every rebuild),
+  # so switching to the board and back must not re-measure anything.
+  foreach ($c in 'night:off', 'mode:clock') { Send "cmd $c" | Out-Null }
+  Start-Sleep 1
+  $beforeBoard = Field (Send "stats") 'rebuilds'
+  Send "cmd mode:market" | Out-Null
+  Start-Sleep 2
+  Shot "instr_market"
+  $r1 = Rect $proc
+  $afterBoard = Field (Send "stats") 'rebuilds'
+  $results += Check "market: mode switch rebuilds nothing" ($afterBoard -eq $beforeBoard) "rebuilds $beforeBoard -> $afterBoard"
+  Start-Sleep 1
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $market = Send "stats"
+  $results += Check "market with seconds: ~1 fps" ((Field $market 'fps') -ge 0.95 -and (Field $market 'fps') -le 1.2) $market
+  $results += Check "market: every frame is a scheduled tick" ((Field $market 'tick') -eq (Field $market 'frames')) ""
+  $results += Check "market: ui pass under 2 ms" ((Field $market 'mean_ms') -lt 2.0) ("mean " + (Field $market 'mean_ms') + " ms, max " + (Field $market 'max_ms') + " ms")
+  # Columns and the caption line are sized for their widest values, so the
+  # window must not have changed size while the clocks ticked.
+  $r2 = Rect $proc
+  $sameSize = (($r1.R - $r1.L) -eq ($r2.R - $r2.L)) -and (($r1.B - $r1.T) -eq ($r2.B - $r2.T))
+  $results += Check "market: window size stable across ticks" $sameSize ("{0}x{1} -> {2}x{3}" -f ($r1.R - $r1.L), ($r1.B - $r1.T), ($r2.R - $r2.L), ($r2.B - $r2.T))
+  # Without seconds the board changes once a minute: at most one tick in
+  # 12 s, on top of the two frames every reply on this channel costs (the
+  # ones a paused stopwatch reports as `other=2`; here they are classed as
+  # ticks because a wake-up is scheduled).
+  Send "cmd seconds" | Out-Null
+  Start-Sleep 2
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $marketMin = Send "stats"
+  $results += Check "market without seconds: at most one tick in 12 s" ((Field $marketMin 'frames') -le 3) $marketMin
+  Shot "instr_market_minutes"
+  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_market_backdrop"; Send "cmd backdrop" | Out-Null
+  Send "cmd 12h" | Out-Null; Start-Sleep 1; Shot "instr_market_12h"; Send "cmd 12h" | Out-Null
+  Send "cmd digital" | Out-Null; Start-Sleep 1; Shot "instr_market_digital"; Send "cmd digital" | Out-Null
+  Send "cmd chroma" | Out-Null; Start-Sleep 1; Shot "instr_market_chroma"; Send "cmd chroma" | Out-Null
+  Send "cmd seconds" | Out-Null
+  Start-Sleep 1
+  # Adding an exchange from the menu adds a row; it lays out one new label
+  # and rebuilds nothing.
+  $beforeRow = Field (Send "stats") 'rebuilds'
+  Send "cmd market:hong-kong" | Out-Null
+  Start-Sleep 1
+  Shot "instr_market_six"
+  $afterRow = Field (Send "stats") 'rebuilds'
+  $results += Check "market: adding a row rebuilds nothing" ($afterRow -eq $beforeRow) "rebuilds $beforeRow -> $afterRow"
+  Send "cmd market:hong-kong" | Out-Null
+  Send "cmd size:small" | Out-Null; Start-Sleep 1; Shot "instr_market_small"
+  Send "cmd size:large" | Out-Null; Start-Sleep 1; Shot "instr_market_large"
+  Send "cmd size:medium" | Out-Null
+  # And a paused stopwatch still sleeps after a visit to the board.
+  Send "cmd mode:stopwatch" | Out-Null
+  Start-Sleep 2
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $afterMarket = Send "stats"
+  $results += Check "after market: stopwatch paused, no timed frames" ((Field $afterMarket 'tick') -eq 0) $afterMarket
+
   # Back to the defaults so the restored config is what the user had.
   foreach ($c in 'night:off', 'mode:clock') { Send "cmd $c" | Out-Null }
 }

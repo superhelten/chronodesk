@@ -14,6 +14,7 @@ use crate::app::{Mode, Size};
 use crate::clock::ClockFormat;
 use crate::icon;
 use crate::layout::Font;
+use crate::market::Market;
 use crate::night::NightMode;
 use crate::theme::Palette;
 
@@ -36,6 +37,8 @@ pub enum Command {
     ToggleFont,
     SetPalette(Palette),
     SetNight(NightMode),
+    /// Adds the exchange to the market board, or removes it.
+    ToggleMarket(Market),
     ToggleOnTop,
     Quit,
 }
@@ -63,6 +66,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
                 "timer" => Command::SetTimerMinutes(value.parse().ok()?),
                 "palette" => Command::SetPalette(Palette::ALL.into_iter().find(|p| p.id() == value)?),
                 "night" => Command::SetNight(NightMode::ALL.into_iter().find(|n| n.id() == value)?),
+                "market" => Command::ToggleMarket(Market::ALL.into_iter().find(|m| m.id() == value)?),
                 _ => return None,
             }
         }
@@ -87,6 +91,7 @@ pub struct MenuState {
     pub show_date: bool,
     pub palette: Palette,
     pub night: NightMode,
+    pub markets: Vec<Market>,
     pub always_on_top: bool,
 }
 
@@ -96,6 +101,7 @@ pub struct Tray {
     lock: CheckMenuItem,
     modes: Vec<(Mode, CheckMenuItem)>,
     presets: Vec<(u64, CheckMenuItem)>,
+    markets: Vec<(Market, CheckMenuItem)>,
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
@@ -156,6 +162,8 @@ impl Tray {
             .into_iter()
             .map(|min| (min, check(&format!("timer:{min}"), &format!("{min} min"))))
             .collect();
+        let markets: Vec<_> =
+            Market::ALL.into_iter().map(|m| (m, check(&format!("market:{}", m.id()), m.label()))).collect();
         let start_pause = MenuItem::with_id("startpause", "Start", true, None);
         let reset = MenuItem::with_id("reset", "Reset", true, None);
         let sizes: Vec<_> =
@@ -175,10 +183,12 @@ impl Tray {
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
         let preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let market_refs: Vec<&dyn IsMenuItem> = markets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let size_refs: Vec<&dyn IsMenuItem> = sizes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let palette_refs: Vec<&dyn IsMenuItem> = palettes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let night_refs: Vec<&dyn IsMenuItem> = nights.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let timer_menu = Submenu::with_items("Timer duration", true, &preset_refs).expect("timer submenu");
+        let market_menu = Submenu::with_items("Exchanges", true, &market_refs).expect("market submenu");
         let size_menu = Submenu::with_items("Size", true, &size_refs).expect("size submenu");
         let palette_menu = Submenu::with_items("Colours", true, &palette_refs).expect("palette submenu");
         let night_menu = Submenu::with_items("Night mode", true, &night_refs).expect("night submenu");
@@ -208,6 +218,7 @@ impl Tray {
         items.extend(modes.iter().map(|(_, i)| i as &dyn IsMenuItem));
         items.extend([
             &timer_menu as &dyn IsMenuItem,
+            &market_menu,
             &s2,
             &start_pause,
             &reset,
@@ -235,6 +246,7 @@ impl Tray {
             lock,
             modes,
             presets,
+            markets,
             start_pause,
             reset,
             sizes,
@@ -278,7 +290,12 @@ impl Tray {
         for (min, item) in &self.presets {
             item.set_checked(*min == state.timer_minutes);
         }
-        let has_controls = state.mode != Mode::Clock;
+        for (market, item) in &self.markets {
+            item.set_checked(state.markets.contains(market));
+            // The board is never left empty, so its last row cannot be unchecked.
+            item.set_enabled(!(state.markets.len() == 1 && state.markets[0] == *market));
+        }
+        let has_controls = state.mode.has_controls();
         self.start_pause.set_text(state.start_label);
         self.start_pause.set_enabled(has_controls);
         self.reset.set_enabled(has_controls);
@@ -296,8 +313,9 @@ impl Tray {
         self.date.set_checked(state.show_date);
         self.backdrop.set_checked(state.backdrop);
         self.outline.set_checked(state.text_outline);
-        // An outline under a backdrop would be invisible anyway.
-        self.outline.set_enabled(!state.backdrop);
+        // An outline under a backdrop would be invisible anyway, and under a
+        // chroma key it is switched off to keep the key colour clean.
+        self.outline.set_enabled(!state.backdrop && !state.chroma);
         self.chroma.set_checked(state.chroma);
         self.seconds.set_checked(state.show_seconds);
         self.on_top.set_checked(state.always_on_top);
@@ -375,6 +393,23 @@ mod tests {
         }
         assert_eq!(parse_command("palette:neon"), None);
         assert_eq!(parse_command("night:dusk"), None);
+    }
+
+    #[test]
+    fn parses_market_ids() {
+        assert_eq!(parse_command("mode:market"), Some(Command::SetMode(Mode::Market)));
+        for market in Market::ALL {
+            assert_eq!(parse_command(&format!("market:{}", market.id())), Some(Command::ToggleMarket(market)));
+        }
+        assert_eq!(parse_command("market:atlantis"), None);
+    }
+
+    #[test]
+    fn only_the_running_modes_have_controls() {
+        assert!(!Mode::Clock.has_controls());
+        assert!(!Mode::Market.has_controls());
+        assert!(Mode::Stopwatch.has_controls());
+        assert!(Mode::Timer.has_controls());
     }
 
     #[test]
