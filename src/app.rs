@@ -717,15 +717,21 @@ impl eframe::App for ChronoApp {
         // chroma key wants opaque text, since anything translucent keys as a
         // green tint.
         let dim_captions = halo.is_none() && !s.chroma;
+        // Translucent hardware dressing — unlit diodes, sockets, hairlines —
+        // keys as a tint, so none of it is drawn over a chroma key.
+        let dressing = !s.chroma;
+        // Unlit segments under the digital face, at the ghost alpha whatever
+        // the readout colour has been dimmed to.
+        let ghost = (dressing && s.font == Font::Digital).then(|| theme.ghost(theme.color.text));
         if let Some(lit) = readout.ring {
-            paint_ring(&painter, rect, &m, theme, lit, halo, s.backdrop);
+            paint_ring(&painter, rect, &m, theme, lit, halo, dressing);
         }
         let inner = rect.shrink(inset);
         let scene_top = inner.top() + m.pad.y;
         let caption_color = match &readout.scene {
             Scene::Line { main, color } => {
                 let origin = pos2(inner.center().x - scene_size.x / 2.0, scene_top);
-                paint_readout(&painter, origin, main, self.layout.glyphs(), *color, halo, theme);
+                paint_readout(&painter, origin, main, self.layout.glyphs(), *color, halo, ghost, theme);
                 // A plain readout colour dims with its caption; an alarm does not.
                 let plain = *color == theme.color.text || *color == theme.color.secondary;
                 if plain && dim_captions { theme.dim_caption(*color) } else { *color }
@@ -733,7 +739,8 @@ impl eframe::App for ChronoApp {
             Scene::Board(rows) => {
                 let geo = geometry.expect("measured with the board");
                 let origin = pos2(inner.center().x - geo.size.x / 2.0, scene_top);
-                board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, halo, dim_captions, &lay);
+                let style = board::Style { halo, dim_closed: dim_captions, dressing, ghost };
+                board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, style, &lay);
                 if dim_captions { theme.dim_caption(theme.color.text) } else { theme.color.text }
             }
         };
@@ -825,24 +832,39 @@ impl ChronoApp {
     }
 }
 
-/// The studio seconds ring: sixty LEDs along the window's outline, the
-/// first `lit` of them on, clockwise from the top. Unlit LEDs are only drawn
-/// over a backdrop; over a bare desktop they would be sixty specks of noise,
-/// and under a halo sixty dark rims.
-fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, lit: usize, halo: Option<f32>, backdrop: bool) {
+/// The studio seconds ring: sixty discrete LEDs along the window's outline,
+/// the first `lit` of them on, clockwise from the top.
+///
+/// Every LED sits in a dark socket, so the unlit ones read as a faint dark
+/// glow with a whisper of the LED colour, the way an off diode does. The one
+/// that lit last blooms a little brighter than the rest, and the four
+/// quarter positions carry marker LEDs in their own colour whether lit or
+/// not. With `dressing` off (chroma key) only the lit LEDs are drawn.
+fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, lit: usize, halo: Option<f32>, dressing: bool) {
     let track = rect.shrink(m.ring_band / 2.0);
     let corner = (m.corner - m.ring_band / 2.0).max(0.0);
-    let on = theme.color.secondary;
-    let off = on.gamma_multiply(f32::from(theme.color.ring_unlit) / 255.0);
-    let shade = Color32::from_black_alpha(theme.color.halo_stroke);
+    let c = &theme.color;
+    let r = m.led_radius;
+    let (on, marker) = (c.secondary, c.ring_marker);
+    let socket = Color32::from_black_alpha(c.ring_socket);
+    let shade = Color32::from_black_alpha(c.halo_stroke);
     for (i, centre) in ring::dots(track, corner).into_iter().enumerate() {
-        if i < lit {
-            if let Some(h) = halo {
-                painter.circle_filled(centre, m.led_radius + h, shade);
+        let is_marker = ring::is_marker(i);
+        let colour = if is_marker { marker } else { on };
+        let radius = if is_marker { r * 1.25 } else { r };
+        if dressing {
+            painter.circle_filled(centre, radius * 1.6, socket);
+        } else if let Some(h) = halo {
+            painter.circle_filled(centre, radius + h, shade);
+        }
+        if i < lit || is_marker {
+            // The bloom stays within the socket, so it never smears onto the desktop.
+            if i + 1 == lit {
+                painter.circle_filled(centre, radius * 1.6, colour.gamma_multiply(f32::from(c.ring_bloom) / 255.0));
             }
-            painter.circle_filled(centre, m.led_radius, on);
-        } else if backdrop {
-            painter.circle_filled(centre, m.led_radius, off);
+            painter.circle_filled(centre, radius, colour);
+        } else if dressing {
+            painter.circle_filled(centre, radius, colour.gamma_multiply(f32::from(c.ring_unlit) / 255.0));
         }
     }
 }

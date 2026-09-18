@@ -123,6 +123,9 @@ impl Theme {
             Palette::Studio => (led_green, led_yellow, Some(led_red)),
         };
         (c.text, c.alert, c.secondary) = (text, alert, secondary.unwrap_or(text));
+        // The quarter markers on the seconds ring are red LEDs, unless the
+        // ring itself is red, when they are the amber ones.
+        c.ring_marker = if palette == Palette::Red { led_yellow } else { led_red };
         if chroma {
             c.open = c.text;
         }
@@ -131,8 +134,22 @@ impl Theme {
             c.alert = c.alert.gamma_multiply(dim);
             c.secondary = c.secondary.gamma_multiply(dim);
             c.open = c.open.gamma_multiply(dim);
+            c.label = c.label.gamma_multiply(dim);
+            c.ring_marker = c.ring_marker.gamma_multiply(dim);
         }
         theme
+    }
+
+    /// The unlit segments behind a digital readout in `color`: the faint
+    /// "off" state of every diode, the way a real display shows its whole
+    /// figure-eight under the digit. Always at the ghost alpha, however
+    /// far night mode or a dimmed row has already faded `color`.
+    pub fn ghost(&self, color: Color32) -> Color32 {
+        let alpha = f32::from(color.a()) / 255.0;
+        if alpha <= 0.0 {
+            return color;
+        }
+        color.gamma_multiply((f32::from(self.color.ghost) / 255.0 / alpha).min(1.0))
     }
 
     /// `color` faded by `factor`, but never below [`TEXT_ALPHA_FLOOR`]: a
@@ -159,8 +176,20 @@ pub struct Colors {
     /// Stopwatch and timer digits, and the lit LEDs of the seconds ring. The
     /// same as `text` except in a dual-colour preset.
     pub secondary: Color32,
-    /// Unlit LEDs of the seconds ring: `secondary` at this alpha.
+    /// Printed labels on the board (city names, exchange codes, AM/PM):
+    /// plain white, whatever colour the LEDs are.
+    pub label: Color32,
+    /// Hairlines between the board's cells.
+    pub separator: Color32,
+    /// Alpha of the unlit segments behind a digital digit (5–8 %).
+    pub ghost: u8,
+    /// Seconds ring: the unlit LED's faint tint of `secondary`, the dark
+    /// glow every LED sits in, the bloom around the LED that just lit, and
+    /// the colour of the four quarter markers.
     pub ring_unlit: u8,
+    pub ring_socket: u8,
+    pub ring_bloom: u8,
+    pub ring_marker: Color32,
     /// Applied to the caption when a backdrop makes full strength unnecessary.
     pub caption_dim: f32,
     /// Timer that has run out.
@@ -224,7 +253,13 @@ impl Default for Colors {
         Self {
             text: Color32::from_rgb(242, 242, 240),
             secondary: Color32::from_rgb(242, 242, 240),
-            ring_unlit: 48,
+            label: Color32::WHITE,
+            separator: Color32::from_white_alpha(38),
+            ghost: 18,
+            ring_unlit: 40,
+            ring_socket: 90,
+            ring_bloom: 70,
+            ring_marker: Color32::from_rgb(255, 70, 60),
             caption_dim: 0.62,
             alert: Color32::from_rgb(245, 165, 36),
             open: Color32::from_rgb(88, 214, 122),
@@ -346,6 +381,39 @@ mod tests {
         let dim = Theme::resolve(Palette::Studio, Some(0.7), false).color;
         let full = Theme::resolve(Palette::Studio, None, false).color;
         assert!(dim.secondary.a() < full.secondary.a(), "night mode dims the counters too");
+    }
+
+    /// Ghosting is a whisper: five to eight percent, per the hardware brief.
+    #[test]
+    fn ghost_segments_sit_between_five_and_eight_percent() {
+        let t = Theme::default();
+        let g = t.ghost(t.color.text);
+        let alpha = f32::from(g.a()) / 255.0;
+        assert!((0.05..=0.08).contains(&alpha), "ghost alpha {alpha}");
+        assert!(g.r() < t.color.text.r(), "premultiplied: the channels fade with the alpha");
+        // Night mode has already faded the readout; the ghost must not fade with it.
+        let night = Theme::resolve(Palette::Default, Some(TEXT_ALPHA_FLOOR), false);
+        let g = night.ghost(night.color.text);
+        let alpha = f32::from(g.a()) / 255.0;
+        assert!((0.05..=0.08).contains(&alpha), "ghost alpha under night dim {alpha}");
+        let dimmed_row = night.ghost(night.dim_caption(night.color.text));
+        assert!((0.05..=0.08).contains(&(f32::from(dimmed_row.a()) / 255.0)));
+    }
+
+    #[test]
+    fn labels_are_white_and_markers_are_red_except_on_a_red_ring() {
+        for palette in Palette::ALL {
+            let c = Theme::resolve(palette, None, false).color;
+            assert_eq!(c.label, Color32::WHITE, "{palette:?}");
+            if palette == Palette::Red {
+                assert_ne!(c.ring_marker, c.secondary, "markers must stand out from a red ring");
+            } else {
+                assert_eq!(c.ring_marker, Color32::from_rgb(255, 70, 60), "{palette:?}");
+            }
+        }
+        let night = Theme::resolve(Palette::Default, Some(0.7), false).color;
+        assert!(night.label.a() < 255, "night mode dims the printed labels too");
+        assert!(night.ring_marker.a() < 255);
     }
 
     #[test]

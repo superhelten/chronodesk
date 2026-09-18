@@ -64,6 +64,12 @@ fn point_at(track: Rect, r: f32, t: f32) -> Pos2 {
     pos2(left + r + half_top, top)
 }
 
+/// The four quarter positions — 12, 3, 6 and 9 o'clock — carry marker LEDs
+/// of their own colour, lit or not.
+pub fn is_marker(index: usize) -> bool {
+    index.is_multiple_of(DOTS / 4)
+}
+
 /// How many LEDs are lit at `second` of the minute on a clock or a running
 /// stopwatch: the top one at :00, the whole ring at :59.
 pub fn lit(second: u32) -> usize {
@@ -148,6 +154,12 @@ mod tests {
         assert_eq!(lit(30), 31);
         assert_eq!(lit(59), DOTS);
         assert_eq!(lit(60), 1, "wraps like a clock");
+    }
+
+    #[test]
+    fn the_quarter_markers_are_at_twelve_three_six_and_nine() {
+        let markers: Vec<usize> = (0..DOTS).filter(|&i| is_marker(i)).collect();
+        assert_eq!(markers, vec![0, 15, 30, 45]);
     }
 
     #[test]

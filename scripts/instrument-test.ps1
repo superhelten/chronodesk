@@ -336,7 +336,21 @@ try {
   Start-Sleep 12
   $ringPaused = Send "stats"
   $results += Check "ring, stopwatch paused: no timed frames" ((Field $ringPaused 'tick') -eq 0) $ringPaused
-  Send "cmd digital" | Out-Null; Send "cmd mode:clock" | Out-Null; Start-Sleep 1; Shot "instr_ring_digital"; Send "cmd digital" | Out-Null
+  Send "cmd digital" | Out-Null; Send "cmd mode:clock" | Out-Null; Start-Sleep 1; Shot "instr_ring_digital"
+  # The hardware dressing: ghost segments under the digits, LED sockets and
+  # quarter markers on the ring, hairlines between the board's modules. All
+  # of it is paint, none of it geometry, so the frame cost is what matters.
+  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_hardware_clock"
+  Send "cmd mode:market" | Out-Null; Start-Sleep 1; Shot "instr_hardware_board"
+  Send "cmd horizontal" | Out-Null; Start-Sleep 1; Shot "instr_hardware_strip"
+  Send "cmd horizontal" | Out-Null; Send "cmd mode:clock" | Out-Null
+  Start-Sleep 1
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $hardware = Send "stats"
+  $results += Check "hardware dressing, digital + ring + backdrop: ~1 fps" ((Field $hardware 'fps') -ge 0.95 -and (Field $hardware 'fps') -le 1.2) $hardware
+  $results += Check "hardware dressing: ui pass under 2 ms" ((Field $hardware 'mean_ms') -lt 2.0) ("mean " + (Field $hardware 'mean_ms') + " ms, max " + (Field $hardware 'max_ms') + " ms")
+  Send "cmd backdrop" | Out-Null; Send "cmd digital" | Out-Null
   foreach ($c in 'palette:default', 'ring', 'seconds') { Send "cmd $c" | Out-Null }
 
   # Back to the defaults so the restored config is what the user had.

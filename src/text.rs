@@ -98,6 +98,11 @@ pub fn paint_galley(
 /// Draws a readout line from cached glyphs, its top-left corner at `origin`.
 /// Every character sits in its cell, so the line's width is `glyphs.width_of`
 /// and nothing is measured here.
+///
+/// With `ghost` set, every digital digit is drawn over its unlit figure
+/// eight in that colour, so the readout reads as a display whose diodes are
+/// all there and only some of them on. The typeface has no such thing.
+#[allow(clippy::too_many_arguments, reason = "a painting call site, not an API")]
 pub fn paint_readout(
     painter: &egui::Painter,
     origin: Pos2,
@@ -105,8 +110,13 @@ pub fn paint_readout(
     glyphs: &Glyphs,
     color: Color32,
     halo: Option<f32>,
+    ghost: Option<Color32>,
     theme: &Theme,
 ) {
+    let eight = ghost.and_then(|_| match glyphs.glyph('8') {
+        Some(Glyph::Digital(polygons)) => Some(polygons),
+        _ => None,
+    });
     let mut x = origin.x;
     for c in text.chars() {
         let cell = glyphs.cell_width(c);
@@ -117,6 +127,11 @@ pub fn paint_readout(
             }
             // Already laid out inside its cell.
             Some(Glyph::Digital(polygons)) => {
+                if c.is_ascii_digit()
+                    && let (Some(eight), Some(ghost)) = (eight, ghost)
+                {
+                    digital::paint(painter, pos2(x, origin.y), eight, ghost, None, theme);
+                }
                 digital::paint(painter, pos2(x, origin.y), polygons, color, halo, theme);
             }
             None => {}

@@ -25,8 +25,8 @@ Requires Rust 1.95+ (eframe 0.36).
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
 | Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop). Off under a backdrop or a chroma key, where a dark rim would only leave a fringe once the green is keyed out |
 | 12-hour clock, date line | Menu → *Appearance* → *12-hour clock*, *Show date*. AM/PM sits on the caption line; with the date hidden the overlay shrinks to the time alone |
-| Digital font | Menu → *Appearance* → *Digital font*: seven-segment digits drawn as polygons, no font file involved. The caption stays in the typeface, like the printed labels on a real display |
-| Seconds ring | Menu → *Appearance* → *Seconds ring*: sixty LEDs along the window's outline, lit clockwise from the top as the seconds pass, the way a studio clock shows them. Follows the clock, a running stopwatch, and a countdown (emptying with it). Unlit LEDs are only drawn over a backdrop |
+| Digital font | Menu → *Appearance* → *Digital font*: seven-segment digits drawn as polygons, no font file involved, with the unlit segments ghosted under every digit at about 7 % so the whole diode is there. The caption stays in the typeface, like the printed labels on a real display |
+| Seconds ring | Menu → *Appearance* → *Seconds ring*: sixty discrete LEDs along the window's outline, each in a dark socket, lit clockwise from the top as the seconds pass; the LED that just lit blooms, and the four quarter positions carry red marker LEDs. Follows the clock, a running stopwatch, and a countdown (emptying with it) |
 | Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool, Amber, or the industrial presets Green matrix, Red seven-segment, Yellow matrix and Studio (green time, red counters and ring). Only the readout colours change; halo, backdrop and controls keep their contrast |
 | Night mode | Menu → *Appearance* → *Night mode*: Off, On, or Auto between `night_from` and `night_to` (22:00–07:00 by default). Dims the readout to `night_dim` (0.7; never below 0.6) |
 
@@ -50,8 +50,13 @@ exactly as a bundled database would.
 
 Columns are sized for their widest possible values (two-digit hours, the longest countdown any
 listed exchange can produce), so the window never resizes as the clocks tick. *One line* turns the
-stack into a strip, each cell as wide as its own label; *Exchange codes* names the rows and the
-caption by the exchange instead of the city.
+stack into a strip of modules, each with its label printed above its digits, the way a multi-zone
+hardware clock is built; *Exchange codes* names the rows and the caption by the exchange instead of
+the city. Labels are printed white whatever the palette, only the LEDs (times, status dots) carry
+the colour, and hairlines separate the modules.
+
+Translucent dressing — ghost segments, LED sockets, hairlines — is left out under a chroma key,
+where anything half-transparent would key as a green tint.
 
 ### Studio look
 
@@ -61,8 +66,8 @@ stopwatch (seconds of the current minute), or a countdown, where it empties with
 seconds hidden the ring still moves every second, so the clock is back to one frame per second; a
 paused counter has nothing moving and stays asleep.
 
-The *Studio* colour preset is the two-colour broadcast convention: the clock in green, the
-stopwatch, timer and ring in red. Every other preset draws the counters in the same colour as the
+The *Studio* colour preset is the two-colour broadcast convention (Wharton's "GR" option): the
+clock in green, the stopwatch, timer and ring in red. Every other preset draws the counters in the same colour as the
 clock. A green preset over the chroma key is the user's choice, and is keyed out like anything green.
 
 ## Configuration
