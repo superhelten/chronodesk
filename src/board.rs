@@ -20,7 +20,7 @@ use eframe::egui::{Color32, Galley, Painter, Pos2, Stroke, Vec2, pos2, vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::app::serde_by_id;
-use crate::layout::{DerivedLayout, Metrics};
+use crate::layout::{DerivedLayout, LabelFace, Metrics};
 use crate::market::{self, Labels, Row, Status};
 use crate::text::{paint_galley, paint_readout};
 use crate::theme::Theme;
@@ -85,19 +85,21 @@ pub struct Geometry {
     pub caption_min_width: f32,
 }
 
-/// `lay` lays out a label at the caption size, letter-spaced like every
-/// caption; it is only called for text the label cache has not seen.
-pub fn measure(
-    layout: &mut DerivedLayout,
-    rows: &[Row],
-    arrangement: Layout,
-    labels: Labels,
-    lay: &dyn Fn(&str) -> Arc<Galley>,
-) -> Geometry {
-    let m = *layout.metrics();
-    let mut label = |text: &str| layout.label_galley(text, lay).size().x;
+/// The two ways a label is set: `caption` is the caption size, letter-spaced
+/// like every caption (AM/PM, the countdown line); `board` is the bold label
+/// size for the printed city names and codes. Either is only called for text
+/// the label cache has not seen.
+pub struct Faces<'a> {
+    pub caption: &'a dyn Fn(&str) -> Arc<Galley>,
+    pub board: &'a dyn Fn(&str) -> Arc<Galley>,
+}
 
-    let label_widths: Vec<f32> = rows.iter().map(|r| label(r.label)).collect();
+pub fn measure(layout: &mut DerivedLayout, rows: &[Row], arrangement: Layout, labels: Labels, faces: &Faces) -> Geometry {
+    let m = *layout.metrics();
+    let label_widths: Vec<f32> =
+        rows.iter().map(|r| layout.label_galley(LabelFace::Board, r.label, faces.board).size().x).collect();
+    let mut label = |text: &str| layout.label_galley(LabelFace::Caption, text, faces.caption).size().x;
+
     let period_width = if rows.iter().any(|r| r.period.is_some()) { label("AM").max(label("PM")) } else { 0.0 };
 
     // The widest digit of the caption face, for the worst-case countdown.
@@ -136,7 +138,7 @@ pub fn measure(
         Layout::Horizontal => {
             // A module: the label line over the time line, as wide as the
             // wider of the two, and a gap with a hairline between modules.
-            let label_line = m.caption_height;
+            let label_line = m.label_font * 1.5;
             let height = if rows.is_empty() { 0.0 } else { label_line + m.row_pitch };
             let module_gap = m.board_gap * 2.0;
             let mut x = 0.0;
@@ -202,7 +204,7 @@ pub fn paint(
     layout: &mut DerivedLayout,
     theme: &Theme,
     style: Style,
-    lay: &dyn Fn(&str) -> Arc<Galley>,
+    faces: &Faces,
 ) {
     let m: Metrics = *layout.metrics();
     let row_halo = style.halo.map(|h| (h * m.row_font / m.font).max(1.0));
@@ -245,7 +247,7 @@ pub fn paint(
             }
         }
 
-        let label = layout.label_galley(row.label, lay);
+        let label = layout.label_galley(LabelFace::Board, row.label, faces.board);
         let pos = pos2(origin.x + cell.label_x, origin.y + cell.label_y - label.size().y / 2.0);
         paint_galley(painter, pos, label, label_color, label_halo, theme);
 
@@ -254,7 +256,7 @@ pub fn paint(
         paint_readout(painter, pos, &row.time, layout.row_glyphs(), time_color, row_halo, style.ghost, theme);
 
         if let Some(period) = row.period {
-            let galley = layout.label_galley(period, lay);
+            let galley = layout.label_galley(LabelFace::Caption, period, faces.caption);
             let pos = pos2(origin.x + cell.period_x, origin.y + cell.time_y - galley.size().y / 2.0);
             paint_galley(painter, pos, galley, label_color, label_halo, theme);
         }
@@ -281,20 +283,25 @@ mod tests {
         Glyphs { digit_width: font * 0.6, height: font * 1.2, widths: HashMap::from([(':', font * 0.3)]), ..Glyphs::default() }
     }
 
-    /// Runs `f` inside a headless egui pass so labels can be laid out.
-    fn with_layout(f: impl FnOnce(&mut DerivedLayout, &dyn Fn(&str) -> Arc<Galley>)) {
+    /// Runs `f` inside a headless egui pass so labels can be laid out: the
+    /// caption face at 11 pt, the board face at the layout's label size.
+    fn with_layout(f: impl FnOnce(&mut DerivedLayout, &Faces)) {
         let theme = Theme::default();
         let mut layout = DerivedLayout::new(&theme);
         layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Sans), &theme, glyphs);
+        let label_font = layout.metrics().label_font;
         let ctx = egui::Context::default();
         let mut f = Some(f);
         let mut out = ctx.run_ui(Default::default(), |ui| {
             let ctx = ui.ctx();
-            let lay = |text: &str| {
+            let caption = |text: &str| {
                 ctx.fonts_mut(|fonts| fonts.layout_no_wrap(text.to_owned(), FontId::proportional(11.0), Color32::WHITE))
             };
+            let board = |text: &str| {
+                ctx.fonts_mut(|fonts| fonts.layout_no_wrap(text.to_owned(), FontId::proportional(label_font), Color32::WHITE))
+            };
             if let Some(f) = f.take() {
-                f(&mut layout, &lay);
+                f(&mut layout, &Faces { caption: &caption, board: &board });
             }
         });
         // Nothing consumes the font atlas here.
@@ -303,14 +310,14 @@ mod tests {
 
     #[test]
     fn columns_are_sized_for_the_widest_value_not_the_current_one() {
-        with_layout(|layout, lay| {
+        with_layout(|layout, faces| {
             let m = *layout.metrics();
             let b = board(&[Market::NewYork, Market::Tokyo], ClockFormat::H12, false, Labels::City);
             assert_eq!((b.rows[0].time.as_str(), b.rows[1].time.as_str()), ("10:00", "11:00"));
-            let geo = measure(layout, &b.rows, Layout::Vertical, Labels::City, lay);
+            let geo = measure(layout, &b.rows, Layout::Vertical, Labels::City, faces);
             // Five cells at row size: two-digit hours even if every row showed one.
             let five = layout.row_glyphs().width_of("00:00");
-            let label_width = layout.label_galley("NEW YORK", lay).size().x;
+            let label_width = layout.label_galley(LabelFace::Board, "NEW YORK", faces.board).size().x;
             let cell = geo.cells[0];
             assert!((cell.time_right - (cell.label_x + label_width + m.board_gap + five)).abs() < 1e-3);
             assert_eq!(geo.cells[1].time_right, cell.time_right, "one column for every row");
@@ -324,10 +331,10 @@ mod tests {
 
     #[test]
     fn seconds_widen_the_time_column_and_a_24h_board_has_no_period_column() {
-        with_layout(|layout, lay| {
+        with_layout(|layout, faces| {
             let rows = |s| board(&[Market::London], ClockFormat::H24, s, Labels::City).rows;
-            let short = measure(layout, &rows(false), Layout::Vertical, Labels::City, lay);
-            let long = measure(layout, &rows(true), Layout::Vertical, Labels::City, lay);
+            let short = measure(layout, &rows(false), Layout::Vertical, Labels::City, faces);
+            let long = measure(layout, &rows(true), Layout::Vertical, Labels::City, faces);
             let eight = layout.row_glyphs().width_of("00:00:00");
             let five = layout.row_glyphs().width_of("00:00");
             assert!((long.cells[0].time_right - short.cells[0].time_right - (eight - five)).abs() < 1e-3);
@@ -339,17 +346,18 @@ mod tests {
     /// widest city, or the window would resize every minute.
     #[test]
     fn the_caption_reservation_covers_every_countdown_shape() {
-        with_layout(|layout, lay| {
+        with_layout(|layout, faces| {
+            let lay = faces.caption;
             let markets = [Market::NewYork, Market::HongKong];
             let rows = board(&markets, ClockFormat::H24, false, Labels::City).rows;
-            let geo = measure(layout, &rows, Layout::Vertical, Labels::City, lay);
+            let geo = measure(layout, &rows, Layout::Vertical, Labels::City, faces);
             for text in ["HONG KONG CLOSES IN 23H 59M", "HONG KONG OPENS IN 2D 16H", "NEW YORK OPENS IN 1M"] {
                 let w = lay(text).size().x;
                 assert!(w <= geo.caption_min_width + 1e-3, "{text}: {w} > {}", geo.caption_min_width);
             }
             // With codes the reservation follows the shorter names.
             let rows = board(&markets, ClockFormat::H24, false, Labels::Code).rows;
-            let codes = measure(layout, &rows, Layout::Vertical, Labels::Code, lay);
+            let codes = measure(layout, &rows, Layout::Vertical, Labels::Code, faces);
             assert!(codes.caption_min_width < geo.caption_min_width);
             assert!(lay("HKEX CLOSES IN 23H 59M").size().x <= codes.caption_min_width + 1e-3);
         });
@@ -359,22 +367,23 @@ mod tests {
     /// module as wide as the wider of the two, hairlines in the gaps.
     #[test]
     fn a_strip_stacks_the_label_over_the_time_in_modules() {
-        with_layout(|layout, lay| {
+        with_layout(|layout, faces| {
             let m = *layout.metrics();
             let rows = board(&[Market::NewYork, Market::Oslo, Market::Tokyo], ClockFormat::H24, false, Labels::City).rows;
-            let geo = measure(layout, &rows, Layout::Horizontal, Labels::City, lay);
-            assert_eq!(geo.size.y, m.caption_height + m.row_pitch);
+            let geo = measure(layout, &rows, Layout::Horizontal, Labels::City, faces);
+            let label_line = m.label_font * 1.5;
+            assert_eq!(geo.size.y, label_line + m.row_pitch);
             for cell in &geo.cells {
                 assert!(cell.label_y < cell.time_y, "label above the time: {cell:?}");
-                assert_eq!(cell.label_y, m.caption_height / 2.0);
+                assert_eq!(cell.label_y, label_line / 2.0);
             }
             for pair in geo.cells.windows(2) {
                 assert!(pair[1].dot_x > pair[0].time_right, "modules must not overlap: {pair:?}");
             }
             let five = layout.row_glyphs().width_of("00:00");
             let dot_span = m.dot_radius * 2.0 + m.board_gap;
-            let new_york = layout.label_galley("NEW YORK", lay).size().x;
-            let oslo = layout.label_galley("OSLO", lay).size().x;
+            let new_york = layout.label_galley(LabelFace::Board, "NEW YORK", faces.board).size().x;
+            let oslo = layout.label_galley(LabelFace::Board, "OSLO", faces.board).size().x;
             let module = |c: &Cell| c.time_right - c.dot_x;
             assert!((module(&geo.cells[0]) - (dot_span + new_york).max(five)).abs() < 1e-3, "widest of label and time");
             assert!((module(&geo.cells[1]) - (dot_span + oslo).max(five)).abs() < 1e-3);
@@ -389,17 +398,17 @@ mod tests {
                 assert!(a.x > left && a.x < right, "hairline {i} at {} not between {left} and {right}", a.x);
             }
 
-            let stacked = measure(layout, &rows, Layout::Vertical, Labels::City, lay);
+            let stacked = measure(layout, &rows, Layout::Vertical, Labels::City, faces);
             assert!(geo.size.x > stacked.size.x && geo.size.y < stacked.size.y);
         });
     }
 
     #[test]
     fn a_stack_has_a_hairline_between_every_pair_of_rows() {
-        with_layout(|layout, lay| {
+        with_layout(|layout, faces| {
             let m = *layout.metrics();
             let rows = board(&Market::DEFAULT, ClockFormat::H24, false, Labels::City).rows;
-            let geo = measure(layout, &rows, Layout::Vertical, Labels::City, lay);
+            let geo = measure(layout, &rows, Layout::Vertical, Labels::City, faces);
             assert_eq!(geo.dividers.len(), rows.len() - 1);
             for (i, (a, b)) in geo.dividers.iter().enumerate() {
                 assert_eq!(a.y, b.y, "a horizontal hairline");
@@ -411,9 +420,9 @@ mod tests {
 
     #[test]
     fn an_empty_board_takes_no_room_either_way() {
-        with_layout(|layout, lay| {
+        with_layout(|layout, faces| {
             for arrangement in Layout::ALL {
-                let geo = measure(layout, &[], arrangement, Labels::City, lay);
+                let geo = measure(layout, &[], arrangement, Labels::City, faces);
                 assert_eq!(geo.size, Vec2::ZERO, "{arrangement:?}");
                 assert_eq!(geo.caption_min_width, 0.0);
                 assert!(geo.cells.is_empty() && geo.dividers.is_empty());

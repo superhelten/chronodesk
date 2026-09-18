@@ -343,7 +343,15 @@ try {
   Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_hardware_clock"
   Send "cmd mode:market" | Out-Null; Start-Sleep 1; Shot "instr_hardware_board"
   Send "cmd horizontal" | Out-Null; Start-Sleep 1; Shot "instr_hardware_strip"
-  Send "cmd horizontal" | Out-Null; Send "cmd mode:clock" | Out-Null
+  # The dot-matrix face is a third face in the layout key: one rebuild in,
+  # one back, like the seven-segment one.
+  $beforeMatrix = Field (Send "stats") 'rebuilds'
+  Send "cmd font:matrix" | Out-Null; Start-Sleep 1; Shot "instr_matrix_strip"
+  $matrixOn = Field (Send "stats") 'rebuilds'
+  $results += Check "dot matrix: exactly one rebuild" ($matrixOn -eq ($beforeMatrix + 1)) "rebuilds $beforeMatrix -> $matrixOn"
+  Send "cmd horizontal" | Out-Null; Start-Sleep 1; Shot "instr_matrix_board"
+  Send "cmd mode:clock" | Out-Null; Start-Sleep 1; Shot "instr_matrix_clock"
+  Send "cmd font:digital" | Out-Null; Start-Sleep 1
   Start-Sleep 1
   Send "stats reset" | Out-Null
   Start-Sleep 12

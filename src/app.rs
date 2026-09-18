@@ -16,9 +16,10 @@ use crate::digital;
 use crate::instrument::{Cause, Instrument};
 use crate::layout::{DerivedLayout, Font, LayoutKey, Metrics};
 use crate::market::{self, BoardStyle, Market};
+use crate::matrix;
 use crate::night::{self, Schedule};
 use crate::placement;
-use crate::text::{display_family, install_display_font, measure_glyphs, paint_galley, paint_readout, spaced};
+use crate::text::{display_family, install_display_font, label_family, measure_glyphs, paint_galley, paint_readout, spaced};
 use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
@@ -376,6 +377,7 @@ impl ChronoApp {
             Command::ToggleRing => s.seconds_ring = !s.seconds_ring,
             Command::SetSize(size) => s.size = size,
             Command::ToggleFont => s.font = s.font.toggled(),
+            Command::SetFont(font) => s.font = font,
             Command::ToggleBackdrop => s.backdrop = !s.backdrop,
             Command::ToggleOutline => s.text_outline = !s.text_outline,
             Command::ToggleChroma => s.chroma = !s.chroma,
@@ -656,6 +658,7 @@ impl eframe::App for ChronoApp {
         self.layout.ensure(key, &theme, |font| match s.font {
             Font::Sans => measure_glyphs(&ctx, font),
             Font::Digital => digital::glyphs(font, &theme.segments),
+            Font::Matrix => matrix::glyphs(font, &theme.matrix),
         });
         let m = *self.layout.metrics();
         // A backdrop already separates the text from whatever is behind it,
@@ -667,6 +670,10 @@ impl eframe::App for ChronoApp {
         // same way: caption size, letter-spaced, in the typeface.
         let caption_font = FontId::new(m.caption_font, display_family());
         let lay = |text: &str| painter.layout_no_wrap(spaced(text), caption_font.clone(), theme.color.text);
+        // The board's printed labels: bold, larger, not letter-spaced.
+        let label_font = FontId::new(m.label_font, label_family());
+        let lay_label = |text: &str| painter.layout_no_wrap(text.to_owned(), label_font.clone(), theme.color.label);
+        let faces = board::Faces { caption: &lay, board: &lay_label };
 
         // An empty caption (clock without date) gives its line back to the
         // window; the hover controls only exist outside clock mode, so
@@ -681,7 +688,7 @@ impl eframe::App for ChronoApp {
         let (scene_size, geometry) = match &readout.scene {
             Scene::Line { main, .. } => (vec2(self.layout.width_of(main), self.layout.glyphs().height), None),
             Scene::Board(rows) => {
-                let geo = board::measure(&mut self.layout, rows, s.board_layout, s.board_labels, &lay);
+                let geo = board::measure(&mut self.layout, rows, s.board_layout, s.board_labels, &faces);
                 (vec2(geo.size.x.max(geo.caption_min_width), geo.size.y), Some(geo))
             }
         };
@@ -722,7 +729,7 @@ impl eframe::App for ChronoApp {
         let dressing = !s.chroma;
         // Unlit segments under the digital face, at the ghost alpha whatever
         // the readout colour has been dimmed to.
-        let ghost = (dressing && s.font == Font::Digital).then(|| theme.ghost(theme.color.text));
+        let ghost = (dressing && s.font.has_ghost()).then(|| theme.ghost(theme.color.text));
         if let Some(lit) = readout.ring {
             paint_ring(&painter, rect, &m, theme, lit, halo, dressing);
         }
@@ -740,7 +747,7 @@ impl eframe::App for ChronoApp {
                 let geo = geometry.expect("measured with the board");
                 let origin = pos2(inner.center().x - geo.size.x / 2.0, scene_top);
                 let style = board::Style { halo, dim_closed: dim_captions, dressing, ghost };
-                board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, style, &lay);
+                board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, style, &faces);
                 if dim_captions { theme.dim_caption(theme.color.text) } else { theme.color.text }
             }
         };

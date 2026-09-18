@@ -9,6 +9,7 @@ mod icon;
 mod instrument;
 mod layout;
 mod market;
+mod matrix;
 mod night;
 mod placement;
 mod ring;

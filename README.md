@@ -25,8 +25,8 @@ Requires Rust 1.95+ (eframe 0.36).
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
 | Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop). Off under a backdrop or a chroma key, where a dark rim would only leave a fringe once the green is keyed out |
 | 12-hour clock, date line | Menu → *Appearance* → *12-hour clock*, *Show date*. AM/PM sits on the caption line; with the date hidden the overlay shrinks to the time alone |
-| Digital font | Menu → *Appearance* → *Digital font*: seven-segment digits drawn as polygons, no font file involved, with the unlit segments ghosted under every digit at about 7 % so the whole diode is there. The caption stays in the typeface, like the printed labels on a real display |
-| Seconds ring | Menu → *Appearance* → *Seconds ring*: sixty discrete LEDs along the window's outline, each in a dark socket, lit clockwise from the top as the seconds pass; the LED that just lit blooms, and the four quarter positions carry red marker LEDs. Follows the clock, a running stopwatch, and a countdown (emptying with it) |
+| Face | Menu → *Appearance* → *Face*: *Typeface*, *Seven-segment* or *Dot matrix* (a 5×7 grid of round LEDs, as on multi-zone and studio hardware clocks). Both LED faces are drawn as polygons, no font file involved, with the unlit diodes ghosted under every digit at about 8 % so the whole display is there. The caption stays in the typeface, like the printed labels on a real display |
+| Seconds ring | Menu → *Appearance* → *Seconds ring*: sixty discrete LEDs along the window's outline, each in a dark socket, lit clockwise from the top as the seconds pass; the LED that just lit blooms, and every fifth position — where an hour hand would point — carries a red marker LED. Follows the clock, a running stopwatch, and a countdown (emptying with it) |
 | Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool, Amber, or the industrial presets Green matrix, Red seven-segment, Yellow matrix and Studio (green time, red counters and ring). Only the readout colours change; halo, backdrop and controls keep their contrast |
 | Night mode | Menu → *Appearance* → *Night mode*: Off, On, or Auto between `night_from` and `night_to` (22:00–07:00 by default). Dims the readout to `night_dim` (0.7; never below 0.6) |
 
@@ -52,8 +52,8 @@ Columns are sized for their widest possible values (two-digit hours, the longest
 listed exchange can produce), so the window never resizes as the clocks tick. *One line* turns the
 stack into a strip of modules, each with its label printed above its digits, the way a multi-zone
 hardware clock is built; *Exchange codes* names the rows and the caption by the exchange instead of
-the city. Labels are printed white whatever the palette, only the LEDs (times, status dots) carry
-the colour, and hairlines separate the modules.
+the city. Labels are printed bold white whatever the palette, only the LEDs (times, status dots)
+carry the colour, and faint hairlines separate the modules.
 
 Translucent dressing — ghost segments, LED sockets, hairlines — is left out under a chroma key,
 where anything half-transparent would key as a green tint.
@@ -160,6 +160,7 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/tz.rs` – time zones as a fixed offset plus a daylight-saving rule, computed locally (unit-tested)
 - `src/board.rs` – the board's column geometry and painting, stacked or as a strip
 - `src/ring.rs` – the studio seconds ring: sixty LED positions along a rounded outline (unit-tested)
+- `src/matrix.rs` – the 5×7 dot-matrix face, round LEDs as polygons (unit-tested)
 - `src/config.rs` – the config file: atomic saves, field-tolerant loading
 - `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`

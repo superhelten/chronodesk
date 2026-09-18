@@ -9,7 +9,7 @@
 
 use eframe::egui::{Color32, Painter, Pos2, Shape, Stroke, pos2};
 
-use crate::layout::{Glyph, Glyphs};
+use crate::layout::{GHOST_CHAR, Glyph, Glyphs};
 use crate::theme::{Segments, Theme};
 
 /// Which segments each digit lights, in the conventional order `a`–`g`:
@@ -61,6 +61,10 @@ pub fn glyphs(font: f32, seg: &Segments) -> Glyphs {
             })
             .collect();
         glyphs.glyphs.insert(char::from_digit(d as u32, 10).expect("digit"), Glyph::Digital(polygons));
+    }
+    // Every segment lit, for ghosting the unlit ones under a digit.
+    if let Some(Glyph::Digital(eight)) = glyphs.glyphs.get(&'8').cloned() {
+        glyphs.glyphs.insert(GHOST_CHAR, Glyph::Digital(eight));
     }
     let dot_width = t + lean + spacing;
     glyphs.widths.insert(':', dot_width);
@@ -134,13 +138,14 @@ mod tests {
     }
 
     #[test]
-    fn covers_exactly_the_readout_alphabet() {
+    fn covers_exactly_the_readout_alphabet_and_the_ghost() {
         let g = build();
         let mut chars: Vec<char> = g.glyphs.keys().copied().collect();
         chars.sort_unstable();
-        let mut expected: Vec<char> = READOUT_CHARS.chars().collect();
+        let mut expected: Vec<char> = READOUT_CHARS.chars().chain([GHOST_CHAR]).collect();
         expected.sort_unstable();
         assert_eq!(chars, expected);
+        assert_eq!(polygons(&g, GHOST_CHAR), polygons(&g, '8'), "the ghost of a seven-segment digit is its eight");
     }
 
     #[test]

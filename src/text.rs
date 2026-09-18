@@ -10,17 +10,25 @@ use std::sync::Arc;
 use eframe::egui::{self, Color32, FontFamily, FontId, Galley, Pos2, pos2, vec2};
 
 use crate::digital;
-use crate::layout::{self, Glyph, Glyphs};
+use crate::layout::{self, GHOST_CHAR, Glyph, Glyphs};
 use crate::theme::Theme;
 
 const DISPLAY_FONT: &str = "display";
+const LABEL_FONT: &str = "display-bold";
 
 pub fn display_family() -> FontFamily {
     FontFamily::Name(DISPLAY_FONT.into())
 }
 
-/// Uses a light system UI face for the readout when one is available, falling
-/// back to egui's bundled font so the app never depends on it.
+/// The board's printed labels: a bold face, like the legends silk-screened
+/// beside a hardware clock's digits.
+pub fn label_family() -> FontFamily {
+    FontFamily::Name(LABEL_FONT.into())
+}
+
+/// Uses a light system UI face for the readout and its bold cut for the
+/// labels when they are available, falling back to egui's bundled font so
+/// the app never depends on them.
 pub fn install_display_font(ctx: &egui::Context) {
     const CANDIDATES: &[&str] = &[
         r"C:\Windows\Fonts\segoeuisl.ttf",
@@ -28,13 +36,21 @@ pub fn install_display_font(ctx: &egui::Context) {
         "/System/Library/Fonts/SFNS.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
     ];
+    const BOLD: &[&str] = &[r"C:\Windows\Fonts\segoeuib.ttf", "/System/Library/Fonts/Helvetica.ttc"];
     let mut fonts = egui::FontDefinitions::default();
-    let mut family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let base = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    let mut family = base.clone();
     if let Some(bytes) = CANDIDATES.iter().find_map(|path| std::fs::read(path).ok()) {
         fonts.font_data.insert(DISPLAY_FONT.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
         family.insert(0, DISPLAY_FONT.to_owned());
     }
+    let mut bold = base;
+    if let Some(bytes) = BOLD.iter().find_map(|path| std::fs::read(path).ok()) {
+        fonts.font_data.insert(LABEL_FONT.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
+        bold.insert(0, LABEL_FONT.to_owned());
+    }
     fonts.families.insert(display_family(), family);
+    fonts.families.insert(label_family(), bold);
     ctx.set_fonts(fonts);
 }
 
@@ -99,9 +115,10 @@ pub fn paint_galley(
 /// Every character sits in its cell, so the line's width is `glyphs.width_of`
 /// and nothing is measured here.
 ///
-/// With `ghost` set, every digital digit is drawn over its unlit figure
-/// eight in that colour, so the readout reads as a display whose diodes are
-/// all there and only some of them on. The typeface has no such thing.
+/// With `ghost` set, every LED-face digit is drawn over its fully lit figure
+/// (cached under `GHOST_CHAR`) in that colour, so the readout reads as a
+/// display whose diodes are all there and only some of them on. The
+/// typeface has no such thing.
 #[allow(clippy::too_many_arguments, reason = "a painting call site, not an API")]
 pub fn paint_readout(
     painter: &egui::Painter,
@@ -113,7 +130,7 @@ pub fn paint_readout(
     ghost: Option<Color32>,
     theme: &Theme,
 ) {
-    let eight = ghost.and_then(|_| match glyphs.glyph('8') {
+    let full = ghost.and_then(|_| match glyphs.glyph(GHOST_CHAR) {
         Some(Glyph::Digital(polygons)) => Some(polygons),
         _ => None,
     });
@@ -128,9 +145,9 @@ pub fn paint_readout(
             // Already laid out inside its cell.
             Some(Glyph::Digital(polygons)) => {
                 if c.is_ascii_digit()
-                    && let (Some(eight), Some(ghost)) = (eight, ghost)
+                    && let (Some(full), Some(ghost)) = (full, ghost)
                 {
-                    digital::paint(painter, pos2(x, origin.y), eight, ghost, None, theme);
+                    digital::paint(painter, pos2(x, origin.y), full, ghost, None, theme);
                 }
                 digital::paint(painter, pos2(x, origin.y), polygons, color, halo, theme);
             }

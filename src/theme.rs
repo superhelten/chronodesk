@@ -20,6 +20,26 @@ pub struct Theme {
     pub color: Colors,
     pub ratio: Ratios,
     pub segments: Segments,
+    pub matrix: Matrix,
+}
+
+/// Proportions of the 5×7 dot-matrix face, relative to the main font size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Matrix {
+    /// Height of the whole cell; the grid is centred in it.
+    pub line: f32,
+    /// Distance between neighbouring dot centres.
+    pub pitch: f32,
+    /// Dot radius.
+    pub dot: f32,
+    /// Horizontal space between neighbouring cells.
+    pub spacing: f32,
+}
+
+impl Default for Matrix {
+    fn default() -> Self {
+        Self { line: 1.0, pitch: 0.125, dot: 0.047, spacing: 0.16 }
+    }
 }
 
 /// Proportions of the seven-segment face, all relative to the main font
@@ -108,7 +128,8 @@ impl Theme {
     pub fn resolve(palette: Palette, night_dim: Option<f32>, chroma: bool) -> Self {
         let mut theme = Self::default();
         let c = &mut theme.color;
-        let led_green = Color32::from_rgb(80, 250, 100);
+        // The lime of a green LED matrix rather than an emerald.
+        let led_green = Color32::from_rgb(140, 250, 70);
         let led_red = Color32::from_rgb(255, 70, 60);
         let led_yellow = Color32::from_rgb(255, 200, 40);
         // Single-colour presets have one readout colour; the counters follow it.
@@ -242,6 +263,9 @@ pub struct Ratios {
     pub board_gap: f32,
     pub board_dot: f32,
     pub board_ring: f32,
+    /// The board's printed labels as a fraction of the row font: bold and
+    /// large, like the legends beside a hardware clock's digits.
+    pub board_label: f32,
     /// Seconds ring: LED radius relative to the caption font, and the band
     /// the ring needs around the content as a multiple of that radius.
     pub ring_dot: f32,
@@ -254,8 +278,8 @@ impl Default for Colors {
             text: Color32::from_rgb(242, 242, 240),
             secondary: Color32::from_rgb(242, 242, 240),
             label: Color32::WHITE,
-            separator: Color32::from_white_alpha(38),
-            ghost: 18,
+            separator: Color32::from_white_alpha(24),
+            ghost: 20,
             ring_unlit: 40,
             ring_socket: 90,
             ring_bloom: 70,
@@ -298,6 +322,7 @@ impl Default for Ratios {
             board_gap: 0.9,
             board_dot: 0.28,
             board_ring: 0.12,
+            board_label: 0.6,
             ring_dot: 0.16,
             ring_band: 5.0,
         }
@@ -337,6 +362,7 @@ mod tests {
             assert_eq!(t.color.control_base, base.color.control_base, "{palette:?}");
             assert_eq!(t.ratio, base.ratio, "{palette:?} must not change the layout");
             assert_eq!(t.segments, base.segments, "{palette:?} must not change the digital face");
+            assert_eq!(t.matrix, base.matrix, "{palette:?} must not change the matrix face");
         }
     }
 
@@ -347,6 +373,13 @@ mod tests {
         assert!(s.thickness * 2.0 < s.width, "two verticals must leave room between them");
         assert!(s.thickness * 3.0 < s.height, "three horizontals must leave room between them");
         assert!(s.gap < s.thickness);
+    }
+
+    #[test]
+    fn matrix_dots_fit_their_pitch_and_the_line_box() {
+        let m = Matrix::default();
+        assert!(m.dot * 2.0 < m.pitch, "dots must not touch");
+        assert!(6.0 * m.pitch + 2.0 * m.dot <= m.line, "seven rows must fit the line box");
     }
 
     #[test]

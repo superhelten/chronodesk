@@ -64,10 +64,10 @@ fn point_at(track: Rect, r: f32, t: f32) -> Pos2 {
     pos2(left + r + half_top, top)
 }
 
-/// The four quarter positions — 12, 3, 6 and 9 o'clock — carry marker LEDs
-/// of their own colour, lit or not.
+/// Every fifth LED — the twelve positions an hour hand would point at —
+/// is a marker of its own colour, lit or not, as on a studio clock.
 pub fn is_marker(index: usize) -> bool {
-    index.is_multiple_of(DOTS / 4)
+    index.is_multiple_of(DOTS / 12)
 }
 
 /// How many LEDs are lit at `second` of the minute on a clock or a running
@@ -157,9 +157,10 @@ mod tests {
     }
 
     #[test]
-    fn the_quarter_markers_are_at_twelve_three_six_and_nine() {
+    fn the_markers_sit_at_the_twelve_hour_positions() {
         let markers: Vec<usize> = (0..DOTS).filter(|&i| is_marker(i)).collect();
-        assert_eq!(markers, vec![0, 15, 30, 45]);
+        assert_eq!(markers, (0..12).map(|h| h * 5).collect::<Vec<_>>());
+        assert!(is_marker(0) && is_marker(15) && is_marker(30) && is_marker(45), "the quarters are among them");
     }
 
     #[test]

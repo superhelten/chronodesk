@@ -35,7 +35,9 @@ pub enum Command {
     ToggleSeconds,
     ToggleClockFormat,
     ToggleDate,
+    /// The old two-way typeface / seven-segment switch.
     ToggleFont,
+    SetFont(Font),
     SetPalette(Palette),
     SetNight(NightMode),
     /// Adds the exchange to the market board, or removes it.
@@ -71,6 +73,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
                 "mode" => Command::SetMode(Mode::ALL.into_iter().find(|m| m.id() == value)?),
                 "size" => Command::SetSize(Size::ALL.into_iter().find(|s| s.id() == value)?),
                 "timer" => Command::SetTimerMinutes(value.parse().ok()?),
+                "font" => Command::SetFont(Font::ALL.into_iter().find(|f| f.id() == value)?),
                 "palette" => Command::SetPalette(Palette::ALL.into_iter().find(|p| p.id() == value)?),
                 "night" => Command::SetNight(NightMode::ALL.into_iter().find(|n| n.id() == value)?),
                 "market" => Command::ToggleMarket(Market::ALL.into_iter().find(|m| m.id() == value)?),
@@ -118,7 +121,7 @@ pub struct Tray {
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
-    digital: CheckMenuItem,
+    faces: Vec<(Font, CheckMenuItem)>,
     palettes: Vec<(Palette, CheckMenuItem)>,
     nights: Vec<(NightMode, CheckMenuItem)>,
     backdrop: CheckMenuItem,
@@ -185,7 +188,8 @@ impl Tray {
             Palette::ALL.into_iter().map(|p| (p, check(&format!("palette:{}", p.id()), p.label()))).collect();
         let nights: Vec<_> =
             NightMode::ALL.into_iter().map(|n| (n, check(&format!("night:{}", n.id()), n.label()))).collect();
-        let digital = check("digital", "Digital font");
+        let faces: Vec<_> =
+            Font::ALL.into_iter().map(|f| (f, check(&format!("font:{}", f.id()), f.label()))).collect();
         let ring = check("ring", "Seconds ring");
         let horizontal = check("horizontal", "One line");
         let codes = check("codes", "Exchange codes");
@@ -203,11 +207,13 @@ impl Tray {
         let mut market_refs: Vec<&dyn IsMenuItem> = vec![&horizontal, &codes, &m1];
         market_refs.extend(markets.iter().map(|(_, i)| i as &dyn IsMenuItem));
         let size_refs: Vec<&dyn IsMenuItem> = sizes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let face_refs: Vec<&dyn IsMenuItem> = faces.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let palette_refs: Vec<&dyn IsMenuItem> = palettes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let night_refs: Vec<&dyn IsMenuItem> = nights.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let timer_menu = Submenu::with_items("Timer duration", true, &preset_refs).expect("timer submenu");
         let market_menu = Submenu::with_items("Exchanges", true, &market_refs).expect("market submenu");
         let size_menu = Submenu::with_items("Size", true, &size_refs).expect("size submenu");
+        let face_menu = Submenu::with_items("Face", true, &face_refs).expect("face submenu");
         let palette_menu = Submenu::with_items("Colours", true, &palette_refs).expect("palette submenu");
         let night_menu = Submenu::with_items("Night mode", true, &night_refs).expect("night submenu");
 
@@ -217,10 +223,10 @@ impl Tray {
         let a1 = sep();
         let appearance_items: [&dyn IsMenuItem; 12] = [
             &size_menu,
+            &face_menu,
             &palette_menu,
             &night_menu,
             &a1,
-            &digital,
             &ring,
             &backdrop,
             &outline,
@@ -272,7 +278,7 @@ impl Tray {
             start_pause,
             reset,
             sizes,
-            digital,
+            faces,
             palettes,
             nights,
             backdrop,
@@ -329,7 +335,9 @@ impl Tray {
         for (size, item) in &self.sizes {
             item.set_checked(*size == state.size);
         }
-        self.digital.set_checked(state.font == Font::Digital);
+        for (font, item) in &self.faces {
+            item.set_checked(*font == state.font);
+        }
         for (palette, item) in &self.palettes {
             item.set_checked(*palette == state.palette);
         }
@@ -411,6 +419,10 @@ mod tests {
     fn parses_appearance_menu_ids() {
         assert_eq!(parse_command("12h"), Some(Command::ToggleClockFormat));
         assert_eq!(parse_command("digital"), Some(Command::ToggleFont));
+        for font in Font::ALL {
+            assert_eq!(parse_command(&format!("font:{}", font.id())), Some(Command::SetFont(font)));
+        }
+        assert_eq!(parse_command("font:serif"), None);
         assert_eq!(parse_command("date"), Some(Command::ToggleDate));
         for palette in Palette::ALL {
             assert_eq!(parse_command(&format!("palette:{}", palette.id())), Some(Command::SetPalette(palette)));

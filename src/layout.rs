@@ -18,18 +18,24 @@ use crate::theme::Theme;
 
 /// Characters a readout can contain; cached up front.
 pub const READOUT_CHARS: &str = "0123456789:.";
+/// The LED faces cache their fully lit figure — every segment, every dot —
+/// under this character, so the unlit state can be ghosted under a digit.
+pub const GHOST_CHAR: char = '\u{2588}';
 
-/// How the readout is drawn: a typeface, or seven-segment digits built from
-/// polygons (see `digital.rs`), which need no font at all.
+/// How the readout is drawn: a typeface, or one of two LED faces built from
+/// polygons (see `digital.rs` and `matrix.rs`), which need no font at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Font {
     #[default]
     Sans,
+    /// Seven-segment digits.
     Digital,
+    /// A 5×7 grid of round LEDs.
+    Matrix,
 }
 
 impl Font {
-    pub const ALL: [Self; 2] = [Self::Sans, Self::Digital];
+    pub const ALL: [Self; 3] = [Self::Sans, Self::Digital, Self::Matrix];
 
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|f| f.id().eq_ignore_ascii_case(id))
@@ -39,13 +45,29 @@ impl Font {
         match self {
             Self::Sans => "sans",
             Self::Digital => "digital",
+            Self::Matrix => "matrix",
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sans => "Typeface",
+            Self::Digital => "Seven-segment",
+            Self::Matrix => "Dot matrix",
+        }
+    }
+
+    /// The LED faces have unlit diodes to ghost; the typeface does not.
+    pub fn has_ghost(self) -> bool {
+        self != Self::Sans
+    }
+
+    /// The old two-way switch: typeface and seven-segment trade places, and
+    /// the matrix face goes back to the typeface.
     pub fn toggled(self) -> Self {
         match self {
             Self::Sans => Self::Digital,
-            Self::Digital => Self::Sans,
+            Self::Digital | Self::Matrix => Self::Sans,
         }
     }
 }
@@ -88,6 +110,8 @@ pub struct Metrics {
     /// Seconds ring: LED radius, and the band it takes around the content.
     pub led_radius: f32,
     pub ring_band: f32,
+    /// The board's printed labels.
+    pub label_font: f32,
 }
 
 impl Metrics {
@@ -112,6 +136,7 @@ impl Metrics {
             ring_width: (caption_font * r.board_ring).max(1.0),
             led_radius: (caption_font * r.ring_dot).max(1.0),
             ring_band: (caption_font * r.ring_dot).max(1.0) * r.ring_band,
+            label_font: (row_font * r.board_label).max(r.caption_min),
         }
     }
 }
@@ -161,6 +186,15 @@ impl Glyphs {
     }
 }
 
+/// Which face a cached label was set in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LabelFace {
+    /// Letter-spaced, the caption size: AM/PM and the countdown captions.
+    Caption,
+    /// Bold, the label size: the board's printed city names and codes.
+    Board,
+}
+
 pub struct DerivedLayout {
     key: Option<LayoutKey>,
     metrics: Metrics,
@@ -174,10 +208,10 @@ pub struct DerivedLayout {
     /// never revisited.
     caption_key: Option<(String, f32)>,
     caption_galley: Option<Arc<Galley>>,
-    /// Labels that are fixed for a market set (city names, AM/PM, the widest
-    /// captions), all at the caption size. Cleared on rebuild, never evicted
-    /// otherwise: there are a few dozen at most.
-    labels: HashMap<String, Arc<Galley>>,
+    /// Labels that are fixed for a market set — city names in the label
+    /// face, AM/PM and the widest captions in the caption face. Cleared on
+    /// rebuild, never evicted otherwise: there are a few dozen at most.
+    labels: HashMap<(LabelFace, String), Arc<Galley>>,
     rebuilds: u32,
 }
 
@@ -251,14 +285,14 @@ impl DerivedLayout {
         self.caption_galley.clone().expect("just populated")
     }
 
-    /// A fixed label at the caption size, laid out on first use and kept
-    /// until the next rebuild.
-    pub fn label_galley(&mut self, text: &str, layout: impl FnOnce(&str) -> Arc<Galley>) -> Arc<Galley> {
-        if let Some(galley) = self.labels.get(text) {
+    /// A fixed label in `face`, laid out on first use and kept until the
+    /// next rebuild.
+    pub fn label_galley(&mut self, face: LabelFace, text: &str, layout: impl FnOnce(&str) -> Arc<Galley>) -> Arc<Galley> {
+        if let Some(galley) = self.labels.get(&(face, text.to_owned())) {
             return galley.clone();
         }
         let galley = layout(text);
-        self.labels.insert(text.to_owned(), galley.clone());
+        self.labels.insert((face, text.to_owned()), galley.clone());
         galley
     }
 
@@ -403,9 +437,21 @@ mod tests {
         for font in Font::ALL {
             assert_eq!(Font::from_id(font.id()), Some(font));
             assert_ne!(font.toggled(), font);
-            assert_eq!(font.toggled().toggled(), font);
         }
+        assert_eq!(Font::Sans.toggled().toggled(), Font::Sans);
+        assert_eq!(Font::Matrix.toggled(), Font::Sans, "the two-way switch always leads back to the typeface");
         assert_eq!(Font::from_id("serif"), None);
+        assert!(!Font::Sans.has_ghost() && Font::Digital.has_ghost() && Font::Matrix.has_ghost());
+    }
+
+    #[test]
+    fn the_board_label_outranks_the_caption_and_follows_the_row_font() {
+        let theme = Theme::default();
+        for size in Size::ALL {
+            let m = Metrics::new(size, &theme);
+            assert!(m.label_font >= m.caption_font, "{size:?}");
+            assert!(m.label_font < m.row_font, "{size:?}: the digits stay the largest thing in a row");
+        }
     }
 
     /// A digital glyph is a list of convex polygons at the cell origin; the
@@ -502,16 +548,21 @@ mod tests {
         with_fonts(|lay| {
             for frame in 0..100 {
                 for city in ["NEW YORK", "LONDON", "TOKYO"] {
-                    layout.label_galley(city, |text| {
+                    layout.label_galley(LabelFace::Board, city, |text| {
                         layouts += 1;
                         lay(text)
                     });
                 }
+                // The same text in another face is another galley.
+                layout.label_galley(LabelFace::Caption, "TOKYO", |text| {
+                    layouts += 1;
+                    lay(text)
+                });
                 layout.caption_galley(&format!("LONDON CLOSES IN {frame}M"), 11.0, || lay("caption"));
             }
         });
-        assert_eq!(layouts, 3);
-        assert_eq!(layout.label_count(), 3);
+        assert_eq!(layouts, 4);
+        assert_eq!(layout.label_count(), 4);
 
         layout.ensure(key(Size::Large), &theme, |_| glyphs());
         assert_eq!(layout.label_count(), 0, "labels from the old font must not survive");
