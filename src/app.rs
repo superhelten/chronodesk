@@ -2,16 +2,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use chrono::{Local, Timelike as _};
+use chrono::{DateTime, Local};
 use eframe::egui::{
     self, Color32, FontFamily, FontId, Galley, PointerButton, Pos2, Rect, Sense, Stroke,
     StrokeKind, Vec2, ViewportCommand, WindowLevel, pos2, vec2,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::clock::{ClockStyle, clock_readout};
 use crate::config::{self, Config};
 use crate::instrument::{Cause, Instrument};
 use crate::layout::{self, DerivedLayout, Glyphs, LayoutKey, Metrics};
+use crate::night::{self, Schedule};
 use crate::placement;
 use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
@@ -125,6 +127,7 @@ macro_rules! serde_by_id {
         }
     };
 }
+pub(crate) use serde_by_id;
 serde_by_id!(Mode, "mode");
 serde_by_id!(Size, "size");
 
@@ -143,6 +146,8 @@ pub struct ChronoApp {
     countdown: Countdown,
     tray: Tray,
     instrument: Instrument,
+    /// The theme drawn with this frame: palette plus any night dimming.
+    /// Rebuilt every frame from a few colour multiplies; nothing caches on it.
     theme: Theme,
     /// Cached layout: rebuilt on size or scale changes, not per frame.
     layout: DerivedLayout,
@@ -357,6 +362,10 @@ impl ChronoApp {
             Command::ToggleOutline => s.text_outline = !s.text_outline,
             Command::ToggleChroma => s.chroma = !s.chroma,
             Command::ToggleSeconds => s.show_seconds = !s.show_seconds,
+            Command::ToggleClockFormat => s.clock_format = s.clock_format.toggled(),
+            Command::ToggleDate => s.show_date = !s.show_date,
+            Command::SetPalette(palette) => s.palette = palette,
+            Command::SetNight(night) => s.night = night,
             Command::ToggleOnTop => {
                 s.always_on_top = !s.always_on_top;
                 let level = if s.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
@@ -434,28 +443,37 @@ impl ChronoApp {
             text_outline: s.text_outline,
             chroma: s.chroma,
             show_seconds: s.show_seconds,
+            clock_format: s.clock_format,
+            show_date: s.show_date,
+            palette: s.palette,
+            night: s.night,
             always_on_top: s.always_on_top,
         }
     }
 
+    /// Resolves the theme for this frame and returns how long night mode can
+    /// be left alone before it has to be looked at again (`Auto` only).
+    fn apply_night(&mut self, local: DateTime<Local>) -> Option<Duration> {
+        let s = &self.settings;
+        let schedule = Schedule { from: s.night_from, to: s.night_to };
+        let (dim, wake) = night::resolve(s.night, schedule, s.night_dim, local.time());
+        self.theme = Theme::resolve(s.palette, dim);
+        wake
+    }
+
     /// Big readout, small caption line, colour, and when the display next changes.
-    fn readout(&self, now: Instant) -> Readout {
+    fn readout(&self, now: Instant, local: DateTime<Local>) -> Readout {
         let s = &self.settings;
         let c = &self.theme.color;
         match s.mode {
             Mode::Clock => {
-                let t = Local::now();
-                let (main, until_change) = if s.show_seconds {
-                    (t.format("%H:%M:%S").to_string(), 1_000_000_000 - u64::from(t.nanosecond() % 1_000_000_000))
-                } else {
-                    let into_minute = u64::from(t.second()) * 1_000_000_000 + u64::from(t.nanosecond() % 1_000_000_000);
-                    (t.format("%H:%M").to_string(), 60_000_000_000 - into_minute)
-                };
+                let style = ClockStyle { format: s.clock_format, show_seconds: s.show_seconds, show_date: s.show_date };
+                let clock = clock_readout(local, style);
                 Readout {
-                    main,
-                    caption: t.format("%a %-d %b").to_string().to_uppercase(),
+                    main: clock.main,
+                    caption: clock.caption,
                     color: c.text,
-                    next_change: Some(Duration::from_nanos(until_change)),
+                    next_change: Some(clock.until_change),
                 }
             }
             Mode::Stopwatch => {
@@ -544,7 +562,11 @@ impl eframe::App for ChronoApp {
         }
 
         let s = self.settings.clone();
-        let readout = self.readout(now);
+        // One reading of the wall clock per frame, shared by the readout and
+        // the night schedule so they can never disagree about the time.
+        let local = Local::now();
+        let night_wake = self.apply_night(local);
+        let readout = self.readout(now, local);
         let painter = ui.painter().clone();
 
         // Rebuilt only when the size or the display scale changes; every frame
@@ -558,17 +580,22 @@ impl eframe::App for ChronoApp {
 
         let main_width = self.layout.width_of(&readout.main);
         let main_height = self.layout.glyphs().height;
-        let caption_galley = {
+        // An empty caption (clock without date) gives its line back to the
+        // window; the hover controls only exist outside clock mode, so
+        // nothing else needs that line.
+        let caption_galley = (!readout.caption.is_empty()).then(|| {
             let font = FontId::new(m.caption_font, display_family());
             let text = spaced(&readout.caption);
             let painter = painter.clone();
             self.layout.caption_galley(&readout.caption, m.caption_font, move || {
                 painter.layout_no_wrap(text, font, theme.color.text)
             })
-        };
+        });
+        let caption_width = caption_galley.as_ref().map_or(0.0, |g| g.size().x);
+        let caption_height = if caption_galley.is_some() { m.caption_height } else { 0.0 };
         let theme = &theme;
 
-        let content = vec2(main_width.max(caption_galley.size().x), main_height + m.caption_height);
+        let content = vec2(main_width.max(caption_width), main_height + caption_height);
         let window_size = (content + m.pad * 2.0).ceil();
         self.fit_window(&ctx, window_size);
 
@@ -603,13 +630,13 @@ impl eframe::App for ChronoApp {
 
         let caption_rect = Rect::from_min_size(
             pos2(rect.left(), main_origin.y + main_height),
-            vec2(rect.width(), m.caption_height),
+            vec2(rect.width(), caption_height),
         );
         let show_controls = hovered && s.mode != Mode::Clock;
         let mut pending = None;
         if show_controls {
             pending = controls(ui, caption_rect, &m, theme, self.menu_state(now).start_label);
-        } else {
+        } else if let Some(caption_galley) = caption_galley {
             let pos = caption_rect.center() - caption_galley.size() / 2.0;
             // Dimming the caption over a halo would eat the contrast the halo
             // just bought, so only dim it when there is a backdrop.
@@ -635,7 +662,13 @@ impl eframe::App for ChronoApp {
 
         // Schedule from the readout actually drawn: sampling the clock again here
         // could straddle a boundary and leave a stale value up for a full period.
-        if let Some(next) = readout.next_change {
+        // A scheduled night boundary is folded in the same way, so an idle
+        // stopwatch still sleeps until the next thing that changes the picture.
+        let wake = match (readout.next_change, night_wake) {
+            (Some(display), Some(night)) => Some(display.min(night)),
+            (display, night) => display.or(night),
+        };
+        if let Some(next) = wake {
             ctx.request_repaint_after(next + WAKE_SLACK);
         }
 
@@ -652,7 +685,7 @@ impl eframe::App for ChronoApp {
         } else {
             Cause::Other
         };
-        self.instrument.record_frame(frame_start.elapsed(), cause);
+        self.instrument.record_frame(frame_start.elapsed(), cause, self.layout.rebuilds());
 
         // Last: this blocks in a native modal loop until the menu closes.
         if background.secondary_clicked() {

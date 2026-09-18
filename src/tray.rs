@@ -11,7 +11,10 @@ use tray_icon::menu::{
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::app::{Mode, Size};
+use crate::clock::ClockFormat;
 use crate::icon;
+use crate::night::NightMode;
+use crate::theme::Palette;
 
 pub const TIMER_PRESETS: [u64; 9] = [1, 3, 5, 10, 15, 25, 30, 45, 60];
 
@@ -27,6 +30,10 @@ pub enum Command {
     ToggleOutline,
     ToggleChroma,
     ToggleSeconds,
+    ToggleClockFormat,
+    ToggleDate,
+    SetPalette(Palette),
+    SetNight(NightMode),
     ToggleOnTop,
     Quit,
 }
@@ -41,6 +48,8 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "outline" => Command::ToggleOutline,
         "chroma" => Command::ToggleChroma,
         "seconds" => Command::ToggleSeconds,
+        "12h" => Command::ToggleClockFormat,
+        "date" => Command::ToggleDate,
         "ontop" => Command::ToggleOnTop,
         "quit" => Command::Quit,
         _ => {
@@ -49,6 +58,8 @@ pub fn parse_command(id: &str) -> Option<Command> {
                 "mode" => Command::SetMode(Mode::ALL.into_iter().find(|m| m.id() == value)?),
                 "size" => Command::SetSize(Size::ALL.into_iter().find(|s| s.id() == value)?),
                 "timer" => Command::SetTimerMinutes(value.parse().ok()?),
+                "palette" => Command::SetPalette(Palette::ALL.into_iter().find(|p| p.id() == value)?),
+                "night" => Command::SetNight(NightMode::ALL.into_iter().find(|n| n.id() == value)?),
                 _ => return None,
             }
         }
@@ -68,6 +79,10 @@ pub struct MenuState {
     pub text_outline: bool,
     pub chroma: bool,
     pub show_seconds: bool,
+    pub clock_format: ClockFormat,
+    pub show_date: bool,
+    pub palette: Palette,
+    pub night: NightMode,
     pub always_on_top: bool,
 }
 
@@ -80,10 +95,14 @@ pub struct Tray {
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
+    palettes: Vec<(Palette, CheckMenuItem)>,
+    nights: Vec<(NightMode, CheckMenuItem)>,
     backdrop: CheckMenuItem,
     outline: CheckMenuItem,
     chroma: CheckMenuItem,
     seconds: CheckMenuItem,
+    twelve_hour: CheckMenuItem,
+    date: CheckMenuItem,
     on_top: CheckMenuItem,
     last_state: Option<MenuState>,
     icon_locked: Option<bool>,
@@ -136,20 +155,47 @@ impl Tray {
         let reset = MenuItem::with_id("reset", "Reset", true, None);
         let sizes: Vec<_> =
             Size::ALL.into_iter().map(|s| (s, check(&format!("size:{}", s.id()), s.label()))).collect();
+        let palettes: Vec<_> =
+            Palette::ALL.into_iter().map(|p| (p, check(&format!("palette:{}", p.id()), p.label()))).collect();
+        let nights: Vec<_> =
+            NightMode::ALL.into_iter().map(|n| (n, check(&format!("night:{}", n.id()), n.label()))).collect();
         let backdrop = check("backdrop", "Backdrop");
         let outline = check("outline", "Text outline");
         let chroma = check("chroma", "Chroma key background (#00FF00)");
         let seconds = check("seconds", "Show seconds");
+        let twelve_hour = check("12h", "12-hour clock");
+        let date = check("date", "Show date");
         let on_top = check("ontop", "Always on top");
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
         let preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let size_refs: Vec<&dyn IsMenuItem> = sizes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let palette_refs: Vec<&dyn IsMenuItem> = palettes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let night_refs: Vec<&dyn IsMenuItem> = nights.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let timer_menu = Submenu::with_items("Timer duration", true, &preset_refs).expect("timer submenu");
         let size_menu = Submenu::with_items("Size", true, &size_refs).expect("size submenu");
+        let palette_menu = Submenu::with_items("Colours", true, &palette_refs).expect("palette submenu");
+        let night_menu = Submenu::with_items("Night mode", true, &night_refs).expect("night submenu");
+
+        // Everything about how the overlay looks lives in one submenu, so the
+        // top level stays the short list it was.
+        let sep = PredefinedMenuItem::separator;
+        let a1 = sep();
+        let appearance_items: [&dyn IsMenuItem; 10] = [
+            &size_menu,
+            &palette_menu,
+            &night_menu,
+            &a1,
+            &backdrop,
+            &outline,
+            &chroma,
+            &seconds,
+            &twelve_hour,
+            &date,
+        ];
+        let appearance_menu = Submenu::with_items("Appearance", true, &appearance_items).expect("appearance submenu");
 
         let menu = Menu::new();
-        let sep = PredefinedMenuItem::separator;
         let (s1, s2, s3, s4) = (sep(), sep(), sep(), sep());
         let mut items: Vec<&dyn IsMenuItem> = vec![&lock, &s1];
         items.extend(modes.iter().map(|(_, i)| i as &dyn IsMenuItem));
@@ -159,11 +205,7 @@ impl Tray {
             &start_pause,
             &reset,
             &s3,
-            &size_menu,
-            &backdrop,
-            &outline,
-            &chroma,
-            &seconds,
+            &appearance_menu,
             &on_top,
             &s4,
             &quit,
@@ -189,10 +231,14 @@ impl Tray {
             start_pause,
             reset,
             sizes,
+            palettes,
+            nights,
             backdrop,
             outline,
             chroma,
             seconds,
+            twelve_hour,
+            date,
             on_top,
             last_state: None,
             icon_locked: None,
@@ -231,6 +277,14 @@ impl Tray {
         for (size, item) in &self.sizes {
             item.set_checked(*size == state.size);
         }
+        for (palette, item) in &self.palettes {
+            item.set_checked(*palette == state.palette);
+        }
+        for (night, item) in &self.nights {
+            item.set_checked(*night == state.night);
+        }
+        self.twelve_hour.set_checked(state.clock_format == ClockFormat::H12);
+        self.date.set_checked(state.show_date);
         self.backdrop.set_checked(state.backdrop);
         self.outline.set_checked(state.text_outline);
         // An outline under a backdrop would be invisible anyway.
@@ -297,6 +351,20 @@ mod tests {
         for size in Size::ALL {
             assert_eq!(parse_command(&format!("size:{}", size.id())), Some(Command::SetSize(size)));
         }
+    }
+
+    #[test]
+    fn parses_appearance_menu_ids() {
+        assert_eq!(parse_command("12h"), Some(Command::ToggleClockFormat));
+        assert_eq!(parse_command("date"), Some(Command::ToggleDate));
+        for palette in Palette::ALL {
+            assert_eq!(parse_command(&format!("palette:{}", palette.id())), Some(Command::SetPalette(palette)));
+        }
+        for mode in NightMode::ALL {
+            assert_eq!(parse_command(&format!("night:{}", mode.id())), Some(Command::SetNight(mode)));
+        }
+        assert_eq!(parse_command("palette:neon"), None);
+        assert_eq!(parse_command("night:dusk"), None);
     }
 
     #[test]

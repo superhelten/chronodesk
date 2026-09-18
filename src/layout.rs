@@ -106,9 +106,9 @@ impl DerivedLayout {
         &self.glyphs
     }
 
-    /// Number of times the glyph cache has actually been rebuilt; used by tests
-    /// to prove the frame loop is not re-measuring text.
-    #[cfg(test)]
+    /// Number of times the glyph cache has actually been rebuilt; used by the
+    /// tests and the instrumentation to prove the frame loop is not
+    /// re-measuring text.
     pub fn rebuilds(&self) -> u32 {
         self.rebuilds
     }

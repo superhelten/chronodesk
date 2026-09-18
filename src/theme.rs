@@ -5,11 +5,72 @@
 //! write into. The values are the ones the current look was measured with.
 
 use eframe::egui::Color32;
+use serde::{Deserialize, Serialize};
+
+use crate::app::serde_by_id;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Theme {
     pub color: Colors,
     pub ratio: Ratios,
+}
+
+/// Fixed colour presets. Only the readout colours differ; halo, backdrop and
+/// controls are tuned for contrast and stay the same in every preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Palette {
+    #[default]
+    Default,
+    Warm,
+    Cool,
+    Amber,
+}
+
+impl Palette {
+    pub const ALL: [Self; 4] = [Self::Default, Self::Warm, Self::Cool, Self::Amber];
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.id().eq_ignore_ascii_case(id))
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Warm => "warm",
+            Self::Cool => "cool",
+            Self::Amber => "amber",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Warm => "Warm",
+            Self::Cool => "Cool",
+            Self::Amber => "Amber",
+        }
+    }
+}
+serde_by_id!(Palette, "palette");
+
+impl Theme {
+    /// The theme to draw with: a preset, optionally dimmed for night mode.
+    /// `night_dim` is the factor applied to the readout colours (1.0 = none).
+    pub fn resolve(palette: Palette, night_dim: Option<f32>) -> Self {
+        let mut theme = Self::default();
+        let c = &mut theme.color;
+        (c.text, c.alert) = match palette {
+            Palette::Default => (c.text, c.alert),
+            Palette::Warm => (Color32::from_rgb(255, 221, 170), Color32::from_rgb(245, 120, 60)),
+            Palette::Cool => (Color32::from_rgb(200, 228, 255), Color32::from_rgb(255, 170, 60)),
+            Palette::Amber => (Color32::from_rgb(245, 180, 60), Color32::from_rgb(240, 80, 70)),
+        };
+        if let Some(dim) = night_dim.filter(|d| *d < 1.0) {
+            c.text = c.text.gamma_multiply(dim);
+            c.alert = c.alert.gamma_multiply(dim);
+        }
+        theme
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,5 +166,54 @@ mod tests {
     fn halo_rings_fade_outwards() {
         let halo = Colors::default().halo;
         assert!(halo[0] > halo[1], "the outer ring must be the fainter one");
+    }
+
+    #[test]
+    fn the_default_palette_is_the_measured_look() {
+        assert_eq!(Theme::resolve(Palette::Default, None), Theme::default());
+        assert_eq!(Theme::resolve(Palette::Default, Some(1.0)), Theme::default());
+    }
+
+    #[test]
+    fn every_palette_keeps_the_contrast_and_keying_tokens() {
+        let base = Theme::default();
+        for palette in Palette::ALL {
+            let t = Theme::resolve(palette, None);
+            assert_eq!(t.color.chroma, base.color.chroma, "{palette:?} must not touch the key colour");
+            assert_eq!(t.color.halo, base.color.halo, "{palette:?}");
+            assert_eq!(t.color.backdrop, base.color.backdrop, "{palette:?}");
+            assert_eq!(t.color.control_base, base.color.control_base, "{palette:?}");
+            assert_eq!(t.ratio, base.ratio, "{palette:?} must not change the layout");
+        }
+    }
+
+    #[test]
+    fn palettes_differ_in_text_colour() {
+        let texts: Vec<_> = Palette::ALL.iter().map(|&p| Theme::resolve(p, None).color.text).collect();
+        for (i, a) in texts.iter().enumerate() {
+            for b in &texts[i + 1..] {
+                assert_ne!(a, b, "two presets share a text colour");
+            }
+        }
+    }
+
+    #[test]
+    fn night_dim_fades_the_readout_and_nothing_else() {
+        let base = Theme::resolve(Palette::Default, None);
+        let dim = Theme::resolve(Palette::Default, Some(0.7));
+        assert!(dim.color.text.a() < base.color.text.a());
+        assert!(dim.color.alert.a() < base.color.alert.a());
+        assert_eq!(dim.color.chroma, base.color.chroma);
+        assert_eq!(dim.color.backdrop, base.color.backdrop);
+        assert_eq!(dim.color.halo, base.color.halo);
+        assert_eq!(dim.color.control_glyph, base.color.control_glyph);
+    }
+
+    #[test]
+    fn palette_ids_round_trip() {
+        for palette in Palette::ALL {
+            assert_eq!(Palette::from_id(palette.id()), Some(palette));
+        }
+        assert_eq!(Palette::from_id("neon"), None);
     }
 }

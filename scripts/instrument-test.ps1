@@ -131,6 +131,43 @@ try {
   Start-Sleep 12
   $back = Send "stats"
   $results += Check "clock again: back to ~1 fps" ((Field $back 'fps') -ge 0.95 -and (Field $back 'fps') -le 1.2) $back
+
+  # --- G: appearance changes never re-measure text ---------------------------
+  # Colours, night mode, 12-hour clock and the date line are all outside the
+  # layout key, so the rebuild count must not move. Size is the one thing
+  # that does rebuild, and it is checked separately to prove the counter works.
+  $before = Field (Send "stats") 'rebuilds'
+  foreach ($c in 'palette:warm', 'palette:cool', 'palette:amber', 'night:on', 'night:auto', '12h', 'date') {
+    Send "cmd $c" | Out-Null
+    Start-Sleep -Milliseconds 300
+  }
+  Start-Sleep 2
+  Shot "instr_appearance"
+  $after = Field (Send "stats") 'rebuilds'
+  $results += Check "appearance: no layout rebuilds" ($before -eq $after) "rebuilds $before -> $after"
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $clock12 = Send "stats"
+  $results += Check "appearance: 12h clock still ~1 fps" ((Field $clock12 'fps') -ge 0.95 -and (Field $clock12 'fps') -le 1.2) $clock12
+  Send "cmd size:large" | Out-Null
+  Start-Sleep 1
+  $large = Field (Send "stats") 'rebuilds'
+  $results += Check "size change: exactly one rebuild" ($large -eq ($after + 1)) "rebuilds $after -> $large"
+  Send "cmd size:medium" | Out-Null
+
+  # --- H: night mode auto keeps an idle stopwatch asleep ---------------------
+  # The next schedule boundary is hours away, so the only wake-up it adds
+  # must be that far out: no timed frames in a 12 s window.
+  Send "cmd mode:stopwatch" | Out-Null
+  Send "cmd night:auto" | Out-Null
+  Start-Sleep 2
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $nightIdle = Send "stats"
+  $results += Check "night auto, stopwatch paused: no timed frames" ((Field $nightIdle 'tick') -eq 0) $nightIdle
+
+  # Back to the defaults so the restored config is what the user had.
+  foreach ($c in 'night:off', 'palette:default', '12h', 'date', 'mode:clock') { Send "cmd $c" | Out-Null }
 }
 finally {
   if ($writer) { try { Send "quit" | Out-Null } catch {} }

@@ -38,6 +38,9 @@ pub struct Telemetry {
     pub last_frame: Option<Instant>,
     pub min_gap: Option<Duration>,
     pub short_gaps: u64,
+    /// Absolute count from the layout cache, so a before/after comparison
+    /// shows whether a change re-measured text.
+    pub layout_rebuilds: u32,
 }
 
 #[cfg_attr(not(feature = "instrument"), allow(dead_code, reason = "only the telemetry tests use it"))]
@@ -63,7 +66,7 @@ impl Telemetry {
         let fps = self.frames as f64 / window.as_secs_f64().max(0.001);
         format!(
             "frames={} window_s={:.2} fps={:.2} mean_ms={:.3} max_ms={:.3} last_ms={:.3} \
-             tick={} input={} config={} other={} min_gap_ms={:.1} short_gaps={}",
+             tick={} input={} config={} other={} min_gap_ms={:.1} short_gaps={} rebuilds={}",
             self.frames,
             window.as_secs_f64(),
             fps,
@@ -76,6 +79,7 @@ impl Telemetry {
             self.by_cause[Cause::Other as usize],
             self.min_gap.map_or(f64::NAN, |g| g.as_secs_f64() * 1000.0),
             self.short_gaps,
+            self.layout_rebuilds,
         )
     }
 }
@@ -210,10 +214,11 @@ mod imp {
                 .is_some_and(|s| s.lock().expect("instrument lock").click.is_some())
         }
 
-        pub fn record_frame(&self, elapsed: Duration, cause: Cause) {
+        pub fn record_frame(&self, elapsed: Duration, cause: Cause, layout_rebuilds: u32) {
             let Some(shared) = &self.shared else { return };
             let mut shared = shared.lock().expect("instrument lock");
             shared.telemetry.record_at(Instant::now(), elapsed, cause);
+            shared.telemetry.layout_rebuilds = layout_rebuilds;
         }
 
         /// A position to re-run the placement check with, as if it had just been
@@ -306,7 +311,9 @@ mod imp {
             "stats" => {
                 let window = shared.window_start.map(|t| t.elapsed()).unwrap_or_default();
                 if parts.next() == Some("reset") {
-                    shared.telemetry = Telemetry::default();
+                    // The rebuild count is absolute, so it survives a reset.
+                    let layout_rebuilds = shared.telemetry.layout_rebuilds;
+                    shared.telemetry = Telemetry { layout_rebuilds, ..Telemetry::default() };
                     shared.window_start = Some(Instant::now());
                     "ok reset".to_owned()
                 } else {
@@ -352,7 +359,7 @@ mod imp {
             false
         }
 
-        pub fn record_frame(&self, _elapsed: Duration, _cause: Cause) {}
+        pub fn record_frame(&self, _elapsed: Duration, _cause: Cause, _layout_rebuilds: u32) {}
 
         pub fn take_place_request(&self) -> Option<Pos2> {
             None
@@ -383,6 +390,15 @@ mod tests {
         assert!(report.contains("fps=1.00"), "{report}");
         assert!(report.contains("mean_ms=1.000"), "{report}");
         assert!(report.contains("max_ms=1.500"), "{report}");
+    }
+
+    /// The layout cache's rebuild count is reported so a test can prove an
+    /// appearance change did not re-measure any text.
+    #[test]
+    fn report_includes_the_layout_rebuild_count() {
+        let t = Telemetry { layout_rebuilds: 3, ..Telemetry::default() };
+        let report = t.report(Duration::from_secs(1));
+        assert!(report.contains("rebuilds=3"), "{report}");
     }
 
     #[test]

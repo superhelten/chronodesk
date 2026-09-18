@@ -22,11 +22,17 @@ use ron::Value;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::app::{Mode, Size};
+use crate::clock::ClockFormat;
+use crate::night::{NightMode, TimeOfDay};
+use crate::theme::Palette;
 
 /// Bump when the meaning of a field changes; add a migration step for it.
 /// Schema 0 is eframe's own persistence file, handled by [`migrate_from_eframe`].
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_TIMER_MINUTES: u64 = 24 * 60;
+/// Night mode may fade the readout to this alpha and no further: below it the
+/// halo no longer buys enough contrast over a bright background.
+pub const MIN_NIGHT_DIM: f32 = 0.6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowPos {
@@ -47,6 +53,17 @@ pub struct Config {
     pub always_on_top: bool,
     /// Dark outline around the text, for legibility without a backdrop.
     pub text_outline: bool,
+    pub clock_format: ClockFormat,
+    /// Date line under the clock.
+    pub show_date: bool,
+    pub palette: Palette,
+    pub night: NightMode,
+    /// Nightly window for `night: "auto"`, as `"HH:MM"`; `from` later than
+    /// `to` wraps past midnight.
+    pub night_from: TimeOfDay,
+    pub night_to: TimeOfDay,
+    /// Factor the readout is faded by at night, `MIN_NIGHT_DIM..=1.0`.
+    pub night_dim: f32,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -63,6 +80,13 @@ impl Default for Config {
             show_seconds: true,
             always_on_top: true,
             text_outline: true,
+            clock_format: ClockFormat::H24,
+            show_date: true,
+            palette: Palette::Default,
+            night: NightMode::Off,
+            night_from: TimeOfDay::new(22, 0).expect("valid"),
+            night_to: TimeOfDay::new(7, 0).expect("valid"),
+            night_dim: 0.7,
             window: None,
         }
     }
@@ -81,6 +105,11 @@ impl Config {
         {
             warnings.push("'window' has non-finite coordinates; ignored".to_owned());
             self.window = None;
+        }
+        let dim = if self.night_dim.is_finite() { self.night_dim.clamp(MIN_NIGHT_DIM, 1.0) } else { 0.7 };
+        if dim != self.night_dim {
+            warnings.push(format!("'night_dim' {} out of range; clamped to {dim}", self.night_dim));
+            self.night_dim = dim;
         }
         self.schema_version = SCHEMA_VERSION;
         self
@@ -182,6 +211,13 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "show_seconds", &mut config.show_seconds, &mut warnings);
     field(&mut fields, "always_on_top", &mut config.always_on_top, &mut warnings);
     field(&mut fields, "text_outline", &mut config.text_outline, &mut warnings);
+    field(&mut fields, "clock_format", &mut config.clock_format, &mut warnings);
+    field(&mut fields, "show_date", &mut config.show_date, &mut warnings);
+    field(&mut fields, "palette", &mut config.palette, &mut warnings);
+    field(&mut fields, "night", &mut config.night, &mut warnings);
+    field(&mut fields, "night_from", &mut config.night_from, &mut warnings);
+    field(&mut fields, "night_to", &mut config.night_to, &mut warnings);
+    field(&mut fields, "night_dim", &mut config.night_dim, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -472,6 +508,128 @@ mod tests {
         assert!(loaded.config.text_outline, "a bad value falls back to the default");
         assert!(loaded.config.chroma, "other fields survive");
         assert!(loaded.warnings[0].contains("text_outline"), "{:?}", loaded.warnings);
+    }
+
+    /// Files written before the appearance fields existed keep working and
+    /// get the previous behaviour: 24-hour clock with the date shown.
+    #[test]
+    fn config_without_appearance_fields_keeps_the_old_look() {
+        let dir = Dir::new("appearance_default");
+        let path = dir.file();
+        write(
+            &path,
+            "(schema_version:1,mode:\"clock\",timer_minutes:25,size:\"medium\",backdrop:false,chroma:false,show_seconds:true,always_on_top:true,text_outline:true,window:Some((x:10.0,y:20.0)))",
+        );
+
+        let loaded = load(&path);
+        assert_eq!(loaded.config.clock_format, ClockFormat::H24);
+        assert!(loaded.config.show_date);
+        assert_eq!(loaded.config.window, Some(WindowPos { x: 10.0, y: 20.0 }));
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        assert_eq!(loaded.config.schema_version, 1, "additive fields must not bump the schema");
+    }
+
+    #[test]
+    fn clock_format_and_date_round_trip_as_ids() {
+        let dir = Dir::new("clock_format");
+        let path = dir.file();
+        save(&path, &Config { clock_format: ClockFormat::H12, show_date: false, ..Default::default() }).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("clock_format: \"12h\""), "{text}");
+        assert!(text.contains("show_date: false"), "{text}");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.config.clock_format, ClockFormat::H12);
+        assert!(!loaded.config.show_date);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn bad_clock_format_falls_back_and_keeps_the_rest() {
+        let dir = Dir::new("clock_format_bad");
+        let path = dir.file();
+        write(&path, "(schema_version:1,clock_format:\"13h\",show_date:false)");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.config.clock_format, ClockFormat::H24);
+        assert!(!loaded.config.show_date, "other fields survive");
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].contains("clock_format"), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn config_without_theme_fields_gets_default_palette_and_night_off() {
+        let dir = Dir::new("theme_default");
+        let path = dir.file();
+        write(&path, "(schema_version:1,mode:\"clock\",show_seconds:false)");
+
+        let loaded = load(&path);
+        let c = &loaded.config;
+        assert_eq!(c.palette, Palette::Default);
+        assert_eq!(c.night, NightMode::Off);
+        assert_eq!(c.night_from, TimeOfDay::parse("22:00").unwrap());
+        assert_eq!(c.night_to, TimeOfDay::parse("07:00").unwrap());
+        assert_eq!(c.night_dim, 0.7);
+        assert!(!c.show_seconds, "existing fields still load");
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn theme_fields_round_trip_as_readable_strings() {
+        let dir = Dir::new("theme_roundtrip");
+        let path = dir.file();
+        let config = Config {
+            palette: Palette::Warm,
+            night: NightMode::Auto,
+            night_from: TimeOfDay::parse("23:30").unwrap(),
+            night_to: TimeOfDay::parse("6:15").unwrap(),
+            night_dim: 0.8,
+            ..Default::default()
+        };
+        save(&path, &config).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("palette: \"warm\""), "{text}");
+        assert!(text.contains("night: \"auto\""), "{text}");
+        assert!(text.contains("night_from: \"23:30\""), "{text}");
+        assert!(text.contains("night_to: \"06:15\""), "{text}");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.config, config);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn a_bad_night_time_falls_back_and_keeps_the_rest() {
+        let dir = Dir::new("night_bad");
+        let path = dir.file();
+        write(&path, "(schema_version:1,night:\"auto\",night_from:\"25:00\",night_to:\"06:00\")");
+
+        let loaded = load(&path);
+        assert_eq!(loaded.config.night_from, Config::default().night_from);
+        assert_eq!(loaded.config.night_to, TimeOfDay::parse("06:00").unwrap());
+        assert_eq!(loaded.config.night, NightMode::Auto);
+        assert_eq!(loaded.warnings.len(), 1);
+        assert!(loaded.warnings[0].contains("night_from"), "{:?}", loaded.warnings);
+    }
+
+    /// The readout must never fade below the legibility floor, whatever the
+    /// file says.
+    #[test]
+    fn night_dim_is_clamped_to_the_legibility_floor() {
+        let dir = Dir::new("night_dim");
+        let path = dir.file();
+        write(&path, "(schema_version:1,night_dim:0.2)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.night_dim, MIN_NIGHT_DIM);
+        assert!(loaded.warnings[0].contains("night_dim"), "{:?}", loaded.warnings);
+
+        write(&path, "(schema_version:1,night_dim:1.5)");
+        assert_eq!(load(&path).config.night_dim, 1.0);
+
+        write(&path, "(schema_version:1,night_dim:0.75)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.night_dim, 0.75);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
     }
 
     #[test]

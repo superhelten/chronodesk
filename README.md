@@ -21,16 +21,19 @@ Requires Rust 1.95+ (eframe 0.36).
 | Start / pause, reset | Hover the overlay in Stopwatch/Timer mode, or `Space` / `R` when focused |
 | Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer |
 | Timer duration | Menu → *Timer duration*, or scroll over an idle timer (±1 min per notch) |
-| Streaming | Menu → *Chroma key background (#00FF00)* |
-| Text over bright windows | Menu → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop) |
+| Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
+| Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop) |
+| 12-hour clock, date line | Menu → *Appearance* → *12-hour clock*, *Show date*. AM/PM sits on the caption line; with the date hidden the overlay shrinks to the time alone |
+| Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool or Amber. Only the readout colours change; halo, backdrop and controls keep their contrast |
+| Night mode | Menu → *Appearance* → *Night mode*: Off, On, or Auto between `night_from` and `night_to` (22:00–07:00 by default). Dims the readout to `night_dim` (0.7; never below 0.6) |
 
 While locked the overlay ignores the mouse entirely, so the tray icon is the way back.
 Locking is disabled if the tray icon could not be created, and the app always starts unlocked.
 
 ## Configuration
 
-Settings (mode, timer length, size, backdrop, chroma, seconds, always-on-top) and the window
-position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
+Settings (mode, timer length, size, backdrop, chroma, seconds, clock format, date line, colours,
+night mode and its schedule, always-on-top) and the window position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
 on macOS), about 1.5 s after the last change and again on exit. The file is meant to be
 readable and hand-editable. Setting `CHRONODESK_CONFIG` to a path names the file outright,
 which is how the test scripts stay out of the config you actually use.
@@ -76,7 +79,7 @@ behind it. So the app can be driven from inside instead:
 ```sh
 cargo build --release --features instrument
 target/release/chronodesk --instrument     # prints its port, also written to %TEMP%\chronodesk-instrument.port
-powershell -File scripts/instrument-test.ps1
+pwsh -File scripts/instrument-test.ps1     # PowerShell 7: the script is UTF-8 without a BOM
 ```
 
 With the feature *and* the flag, the app listens on a loopback port and takes line commands:
@@ -92,7 +95,7 @@ from the config file, and `placement` reports what was decided and against which
 position left behind by a disconnected screen is reproducible without unplugging one:
 
 ```sh
-powershell -File scripts/placement-test.ps1
+pwsh -File scripts/placement-test.ps1
 ```
 
 That script seeds a scratch `app.ron` with a position outside every screen, points the app at it
