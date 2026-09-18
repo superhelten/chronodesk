@@ -6,7 +6,7 @@ Minimalist transparent desktop overlay: clock, stopwatch and timer. Rust + `efra
 
 ```sh
 cargo run --release          # target/release/chronodesk.exe (~5.5 MB, no console window)
-cargo test                   # timer/stopwatch logic + menu-id parsing
+cargo test                   # pure logic, plus the mutex and a scratch registry key on Windows
 ```
 
 Requires Rust 1.95+ (eframe 0.36).
@@ -28,6 +28,7 @@ Requires Rust 1.95+ (eframe 0.36).
 | Face | Menu → *Appearance* → *Face*: *Typeface*, *Seven-segment* or *Dot matrix* (a 5×7 grid of round LEDs, as on multi-zone and studio hardware clocks). Both LED faces are drawn as polygons, no font file involved, with the unlit diodes ghosted under every digit at about 8 % so the whole display is there. The caption stays in the typeface, like the printed labels on a real display |
 | Seconds ring | Menu → *Appearance* → *Seconds ring*: sixty discrete LEDs along the window's outline, each in a dark socket, lit clockwise from the top as the seconds pass; the LED that just lit blooms, and every fifth position — where an hour hand would point — carries a red marker LED. Follows the clock, a running stopwatch, and a countdown (emptying with it) |
 | Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool, Amber, or the industrial presets Green matrix, Red seven-segment, Yellow matrix and Studio (green time, red counters and ring). Only the readout colours change; halo, backdrop and controls keep their contrast |
+| Start with Windows | Menu → *Start with Windows*. The check mark is read from the registry, so it means "this exe starts at the next login" and nothing less: an entry switched off in Task Manager, or one left behind by a copy that has since moved, shows as off, and one click puts it right |
 | Night mode | Menu → *Appearance* → *Night mode*: Off, On, or Auto between `night_from` and `night_to` (22:00–07:00 by default). Dims the readout to `night_dim` (0.7; never below 0.6) |
 
 While locked the overlay ignores the mouse entirely, so the tray icon is the way back.
@@ -69,6 +70,22 @@ paused counter has nothing moving and stays asleep.
 The *Studio* colour preset is the two-colour broadcast convention (Wharton's "GR" option): the
 clock in green, the stopwatch, timer and ring in red. Every other preset draws the counters in the same colour as the
 clock. A green preset over the chroma key is the user's choice, and is keyed out like anything green.
+
+### One overlay per config file
+
+Launching ChronoDesk a second time does nothing: the second copy sees the first and exits before it
+reads anything. Two copies sharing one `app.ron` would each save their own settings and window
+position, with whichever quit last winning, behind two identical tray icons. The guard is a named
+mutex keyed on the config file's path, not on the app, so an instance pointed elsewhere with
+`CHRONODESK_CONFIG` runs alongside — which is what lets the test scripts run while your own overlay
+stays up. Windows releases the mutex with the process, so a crash never leaves a stale lock.
+
+*Start with Windows* writes the exe's quoted path to the per-user `Run` key (no admin rights, no
+service, no scheduled task) and removes it again. The setting is deliberately **not** in `app.ron`:
+the registry is the only record, because it can change behind the app's back — in Settings, in Task
+Manager (which leaves the value and writes a veto under `Explorer\StartupApproved\Run`), or by
+moving the exe. The menu re-reads it at most every ten seconds, on frames that are drawn anyway.
+Neither feature exists on macOS yet.
 
 ## Configuration
 
@@ -148,6 +165,15 @@ That script seeds a scratch `app.ron` with a position outside every screen, poin
 with `CHRONODESK_CONFIG`, and checks the overlay against the work area it reads from Windows
 itself rather than against the app's own numbers.
 
+```sh
+pwsh -File scripts/lifecycle-test.ps1
+```
+
+checks the single-instance guard (same file spelled differently: steps aside; another file: runs
+alongside) and the startup entry, reading the registry from PowerShell rather than through the app.
+In an `instrument` build `CHRONODESK_RUN_KEY` redirects the `Run` key to a scratch key, so the real
+one is never written; a release build ignores the variable.
+
 Without the feature the flag only prints a notice: there is no listener, no thread and no timers.
 
 ## Layout
@@ -162,6 +188,8 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/ring.rs` – the studio seconds ring: sixty LED positions along a rounded outline (unit-tested)
 - `src/matrix.rs` – the 5×7 dot-matrix face, round LEDs as polygons (unit-tested)
 - `src/config.rs` – the config file: atomic saves, field-tolerant loading
+- `src/instance.rs` – one overlay per config file: a named mutex keyed on the config path (unit-tested)
+- `src/autostart.rs` – *Start with Windows*: the per-user `Run` key as the only record (unit-tested against a scratch key)
 - `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`
 - `src/timer.rs` – pure stopwatch/countdown logic and formatting (unit-tested)

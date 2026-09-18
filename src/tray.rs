@@ -46,6 +46,8 @@ pub enum Command {
     ToggleBoardLabels,
     ToggleRing,
     ToggleOnTop,
+    /// Registers this exe to start at login, or removes the entry.
+    ToggleAutostart,
     Quit,
 }
 
@@ -66,6 +68,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "horizontal" => Command::ToggleBoardLayout,
         "codes" => Command::ToggleBoardLabels,
         "ontop" => Command::ToggleOnTop,
+        "autostart" => Command::ToggleAutostart,
         "quit" => Command::Quit,
         _ => {
             let (kind, value) = id.split_once(':')?;
@@ -106,6 +109,8 @@ pub struct MenuState {
     pub board_labels: Labels,
     pub seconds_ring: bool,
     pub always_on_top: bool,
+    pub autostart: bool,
+    pub autostart_available: bool,
 }
 
 pub struct Tray {
@@ -131,6 +136,7 @@ pub struct Tray {
     twelve_hour: CheckMenuItem,
     date: CheckMenuItem,
     on_top: CheckMenuItem,
+    autostart: CheckMenuItem,
     last_state: Option<MenuState>,
     icon_locked: Option<bool>,
     rx: Receiver<Command>,
@@ -200,6 +206,7 @@ impl Tray {
         let twelve_hour = check("12h", "12-hour clock");
         let date = check("date", "Show date");
         let on_top = check("ontop", "Always on top");
+        let autostart = check("autostart", "Start with Windows");
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
         let preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
@@ -250,6 +257,7 @@ impl Tray {
             &s3,
             &appearance_menu,
             &on_top,
+            &autostart,
             &s4,
             &quit,
         ]);
@@ -288,6 +296,7 @@ impl Tray {
             twelve_hour,
             date,
             on_top,
+            autostart,
             last_state: None,
             icon_locked: None,
             rx,
@@ -354,6 +363,8 @@ impl Tray {
         self.chroma.set_checked(state.chroma);
         self.seconds.set_checked(state.show_seconds);
         self.on_top.set_checked(state.always_on_top);
+        self.autostart.set_checked(state.autostart);
+        self.autostart.set_enabled(state.autostart_available);
 
         if self.icon_locked != Some(state.locked) && let Some(tray) = &self.icon {
             let tooltip = if state.locked {
@@ -406,6 +417,7 @@ mod tests {
     fn parses_all_menu_ids() {
         assert_eq!(parse_command("lock"), Some(Command::ToggleLock));
         assert_eq!(parse_command("quit"), Some(Command::Quit));
+        assert_eq!(parse_command("autostart"), Some(Command::ToggleAutostart));
         assert_eq!(parse_command("timer:25"), Some(Command::SetTimerMinutes(25)));
         for mode in Mode::ALL {
             assert_eq!(parse_command(&format!("mode:{}", mode.id())), Some(Command::SetMode(mode)));

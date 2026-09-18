@@ -8,6 +8,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::autostart::Autostart;
 use crate::board;
 use crate::clock::{ClockStyle, clock_readout};
 use crate::ring;
@@ -181,9 +182,19 @@ pub struct ChronoApp {
     /// comparison would then never match.
     pending_move: Option<(Pos2, Instant)>,
     wheel: f32,
+    autostart: Autostart,
+    /// This exe, as the `Run` key would name it; `None` leaves the menu item disabled.
+    exe: Option<PathBuf>,
+    /// The registry's answer and when it was read.
+    autostart_on: (bool, Instant),
 }
 
 /// How long to wait after the last change before writing the config file.
+/// How stale the menu's autostart check mark may get. The registry can change
+/// behind the app's back (Settings, Task Manager); it is re-read on frames that
+/// are drawn anyway, never by waking up for it.
+const AUTOSTART_RECHECK: Duration = Duration::from_secs(10);
+
 const SAVE_DELAY: Duration = Duration::from_millis(1500);
 
 impl ChronoApp {
@@ -203,6 +214,9 @@ impl ChronoApp {
         let settings = loaded.config;
 
         install_display_font(&cc.egui_ctx);
+        let autostart = Autostart::system();
+        let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
+        let autostart_on = (exe.as_deref().is_some_and(|exe| autostart.enabled(exe)), Instant::now());
         if !settings.always_on_top {
             cc.egui_ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
         }
@@ -225,6 +239,9 @@ impl ChronoApp {
             window_size: None,
             window_styled: false,
             wheel: 0.0,
+            autostart,
+            exe,
+            autostart_on,
         })
     }
 
@@ -391,6 +408,7 @@ impl ChronoApp {
                 let level = if s.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
                 ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
             }
+            Command::ToggleAutostart => self.toggle_autostart(now),
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
         }
         // The OS flips check items on click; re-assert our state.
@@ -474,6 +492,29 @@ impl ChronoApp {
             board_labels: s.board_labels,
             seconds_ring: s.seconds_ring,
             always_on_top: s.always_on_top,
+            autostart: self.autostart_on.0,
+            autostart_available: self.exe.is_some(),
+        }
+    }
+
+    /// Flips from the check mark the user was looking at, not from a fresh read:
+    /// the tray menu opens without a frame, so after hours asleep the mark can be
+    /// stale, and a click must still do what it appeared to offer. The registry
+    /// is read back afterwards, so the mark ends up telling the truth either way.
+    fn toggle_autostart(&mut self, now: Instant) {
+        let Some(exe) = self.exe.as_deref() else { return };
+        let on = !self.autostart_on.0;
+        if let Err(err) = self.autostart.set(exe, on) {
+            eprintln!("ChronoDesk: could not update the startup entry: {err}");
+        }
+        self.autostart_on = (self.autostart.enabled(exe), now);
+    }
+
+    fn recheck_autostart(&mut self, now: Instant) {
+        if let Some(exe) = self.exe.as_deref()
+            && now.duration_since(self.autostart_on.1) >= AUTOSTART_RECHECK
+        {
+            self.autostart_on = (self.autostart.enabled(exe), now);
         }
     }
 
@@ -774,6 +815,7 @@ impl eframe::App for ChronoApp {
             ctx.send_viewport_cmd(ViewportCommand::StartDrag);
         }
 
+        self.recheck_autostart(now);
         let state = self.menu_state(now);
         self.tray.sync(state);
         self.persist(&ctx, now);
