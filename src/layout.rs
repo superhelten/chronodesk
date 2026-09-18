@@ -10,13 +10,46 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use eframe::egui::{Galley, Vec2, vec2};
+use eframe::egui::{Galley, Pos2, Vec2, vec2};
+use serde::{Deserialize, Serialize};
 
-use crate::app::Size;
+use crate::app::{Size, serde_by_id};
 use crate::theme::Theme;
 
 /// Characters a readout can contain; cached up front.
 pub const READOUT_CHARS: &str = "0123456789:.";
+
+/// How the readout is drawn: a typeface, or seven-segment digits built from
+/// polygons (see `digital.rs`), which need no font at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Font {
+    #[default]
+    Sans,
+    Digital,
+}
+
+impl Font {
+    pub const ALL: [Self; 2] = [Self::Sans, Self::Digital];
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.id().eq_ignore_ascii_case(id))
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Sans => "sans",
+            Self::Digital => "digital",
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Sans => Self::Digital,
+            Self::Digital => Self::Sans,
+        }
+    }
+}
+serde_by_id!(Font, "font");
 
 /// What the cached layout depends on. Anything else (mode, time, colours) can
 /// change without a rebuild.
@@ -25,11 +58,12 @@ pub struct LayoutKey {
     pub size: Size,
     /// `f32::to_bits`, so the key stays comparable and hashable.
     pub pixels_per_point: u32,
+    pub font: Font,
 }
 
 impl LayoutKey {
-    pub fn new(size: Size, pixels_per_point: f32) -> Self {
-        Self { size, pixels_per_point: pixels_per_point.to_bits() }
+    pub fn new(size: Size, pixels_per_point: f32, font: Font) -> Self {
+        Self { size, pixels_per_point: pixels_per_point.to_bits(), font }
     }
 }
 
@@ -64,8 +98,16 @@ impl Metrics {
     }
 }
 
-/// Measured glyphs for the current font size. `galleys` is empty in tests,
-/// where only the measurements matter.
+/// One readout character, ready to paint at a cell's top-left corner.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Glyph {
+    Text(Arc<Galley>),
+    /// Convex polygons in cell coordinates.
+    Digital(Vec<Vec<Pos2>>),
+}
+
+/// Measured glyphs for the current font size and face. `glyphs` is empty in
+/// tests, where only the measurements matter.
 #[derive(Debug, Default)]
 pub struct Glyphs {
     /// Every digit is drawn in a cell this wide, so the readout never jitters.
@@ -73,7 +115,7 @@ pub struct Glyphs {
     pub height: f32,
     /// Cell widths for the non-digit characters.
     pub widths: HashMap<char, f32>,
-    pub galleys: HashMap<char, Arc<Galley>>,
+    pub glyphs: HashMap<char, Glyph>,
 }
 
 pub struct DerivedLayout {
@@ -147,8 +189,8 @@ impl DerivedLayout {
         }
     }
 
-    pub fn galley(&self, c: char) -> Option<&Arc<Galley>> {
-        self.glyphs.galleys.get(&c)
+    pub fn glyph(&self, c: char) -> Option<&Glyph> {
+        self.glyphs.glyphs.get(&c)
     }
 
     fn caption_is_stale(&self, text: &str, font: f32) -> bool {
@@ -169,18 +211,19 @@ impl DerivedLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui::pos2;
 
     fn glyphs() -> Glyphs {
         Glyphs {
             digit_width: 24.0,
             height: 50.0,
             widths: HashMap::from([(':', 10.0), ('.', 8.0)]),
-            galleys: HashMap::new(),
+            glyphs: HashMap::new(),
         }
     }
 
     fn key(size: Size) -> LayoutKey {
-        LayoutKey::new(size, 1.0)
+        LayoutKey::new(size, 1.0, Font::Sans)
     }
 
     #[test]
@@ -225,8 +268,52 @@ mod tests {
         assert_eq!(layout.metrics().font, Size::Large.font_size());
 
         // Display scale change at the same size.
-        assert!(layout.ensure(LayoutKey::new(Size::Large, 1.5), &theme, |_| glyphs()));
+        assert!(layout.ensure(LayoutKey::new(Size::Large, 1.5, Font::Sans), &theme, |_| glyphs()));
         assert_eq!(layout.rebuilds(), 3);
+    }
+
+    /// The face decides how every cell is measured, so it is part of the key:
+    /// switching it rebuilds once, and switching back rebuilds once more.
+    #[test]
+    fn changing_the_font_face_rebuilds_the_cache() {
+        let theme = Theme::default();
+        let mut layout = DerivedLayout::new(&theme);
+        layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Sans), &theme, |_| glyphs());
+        assert!(layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Digital), &theme, |_| glyphs()));
+        assert_eq!(layout.rebuilds(), 2);
+        assert!(!layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Digital), &theme, |_| panic!("re-measured")));
+        assert!(layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Sans), &theme, |_| glyphs()));
+        assert_eq!(layout.rebuilds(), 3);
+    }
+
+    #[test]
+    fn font_ids_round_trip_and_toggle() {
+        for font in Font::ALL {
+            assert_eq!(Font::from_id(font.id()), Some(font));
+            assert_ne!(font.toggled(), font);
+            assert_eq!(font.toggled().toggled(), font);
+        }
+        assert_eq!(Font::from_id("serif"), None);
+    }
+
+    /// A digital glyph is a list of convex polygons at the cell origin; the
+    /// cache stores it like a galley and hands it back by character.
+    #[test]
+    fn digital_glyphs_are_stored_and_looked_up_by_character() {
+        let theme = Theme::default();
+        let mut layout = DerivedLayout::new(&theme);
+        let square = vec![pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
+        layout.ensure(LayoutKey::new(Size::Medium, 1.0, Font::Digital), &theme, |_| Glyphs {
+            digit_width: 10.0,
+            height: 20.0,
+            widths: HashMap::new(),
+            glyphs: HashMap::from([('8', Glyph::Digital(vec![square.clone()]))]),
+        });
+        match layout.glyph('8') {
+            Some(Glyph::Digital(polygons)) => assert_eq!(polygons, &vec![square]),
+            other => panic!("expected a digital glyph, got {other:?}"),
+        }
+        assert!(layout.glyph('9').is_none());
     }
 
     #[test]

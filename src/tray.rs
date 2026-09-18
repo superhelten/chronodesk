@@ -13,6 +13,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::app::{Mode, Size};
 use crate::clock::ClockFormat;
 use crate::icon;
+use crate::layout::Font;
 use crate::night::NightMode;
 use crate::theme::Palette;
 
@@ -32,6 +33,7 @@ pub enum Command {
     ToggleSeconds,
     ToggleClockFormat,
     ToggleDate,
+    ToggleFont,
     SetPalette(Palette),
     SetNight(NightMode),
     ToggleOnTop,
@@ -50,6 +52,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "seconds" => Command::ToggleSeconds,
         "12h" => Command::ToggleClockFormat,
         "date" => Command::ToggleDate,
+        "digital" => Command::ToggleFont,
         "ontop" => Command::ToggleOnTop,
         "quit" => Command::Quit,
         _ => {
@@ -75,6 +78,7 @@ pub struct MenuState {
     pub timer_minutes: u64,
     pub start_label: &'static str,
     pub size: Size,
+    pub font: Font,
     pub backdrop: bool,
     pub text_outline: bool,
     pub chroma: bool,
@@ -95,6 +99,7 @@ pub struct Tray {
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
+    digital: CheckMenuItem,
     palettes: Vec<(Palette, CheckMenuItem)>,
     nights: Vec<(NightMode, CheckMenuItem)>,
     backdrop: CheckMenuItem,
@@ -159,6 +164,7 @@ impl Tray {
             Palette::ALL.into_iter().map(|p| (p, check(&format!("palette:{}", p.id()), p.label()))).collect();
         let nights: Vec<_> =
             NightMode::ALL.into_iter().map(|n| (n, check(&format!("night:{}", n.id()), n.label()))).collect();
+        let digital = check("digital", "Digital font");
         let backdrop = check("backdrop", "Backdrop");
         let outline = check("outline", "Text outline");
         let chroma = check("chroma", "Chroma key background (#00FF00)");
@@ -181,11 +187,12 @@ impl Tray {
         // top level stays the short list it was.
         let sep = PredefinedMenuItem::separator;
         let a1 = sep();
-        let appearance_items: [&dyn IsMenuItem; 10] = [
+        let appearance_items: [&dyn IsMenuItem; 11] = [
             &size_menu,
             &palette_menu,
             &night_menu,
             &a1,
+            &digital,
             &backdrop,
             &outline,
             &chroma,
@@ -231,6 +238,7 @@ impl Tray {
             start_pause,
             reset,
             sizes,
+            digital,
             palettes,
             nights,
             backdrop,
@@ -277,6 +285,7 @@ impl Tray {
         for (size, item) in &self.sizes {
             item.set_checked(*size == state.size);
         }
+        self.digital.set_checked(state.font == Font::Digital);
         for (palette, item) in &self.palettes {
             item.set_checked(*palette == state.palette);
         }
@@ -356,6 +365,7 @@ mod tests {
     #[test]
     fn parses_appearance_menu_ids() {
         assert_eq!(parse_command("12h"), Some(Command::ToggleClockFormat));
+        assert_eq!(parse_command("digital"), Some(Command::ToggleFont));
         assert_eq!(parse_command("date"), Some(Command::ToggleDate));
         for palette in Palette::ALL {
             assert_eq!(parse_command(&format!("palette:{}", palette.id())), Some(Command::SetPalette(palette)));

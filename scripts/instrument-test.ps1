@@ -145,6 +145,9 @@ try {
   Shot "instr_appearance"
   $after = Field (Send "stats") 'rebuilds'
   $results += Check "appearance: no layout rebuilds" ($before -eq $after) "rebuilds $before -> $after"
+  # Every reply queues a repaint; let the one from the read above land
+  # before the reset, or it is counted as a frame in the window.
+  Start-Sleep 1
   Send "stats reset" | Out-Null
   Start-Sleep 12
   $clock12 = Send "stats"
@@ -154,6 +157,49 @@ try {
   $large = Field (Send "stats") 'rebuilds'
   $results += Check "size change: exactly one rebuild" ($large -eq ($after + 1)) "rebuilds $after -> $large"
   Send "cmd size:medium" | Out-Null
+  Start-Sleep 1
+
+  # --- I: the digital face is one rebuild, then as cheap as the typeface ------
+  foreach ($c in 'night:off', 'palette:default', '12h', 'date') { Send "cmd $c" | Out-Null }
+  Start-Sleep 1
+  $beforeFont = Field (Send "stats") 'rebuilds'
+  Send "cmd digital" | Out-Null
+  Start-Sleep 2
+  Shot "instr_digital"
+  $digitalOn = Field (Send "stats") 'rebuilds'
+  $results += Check "digital font: exactly one rebuild" ($digitalOn -eq ($beforeFont + 1)) "rebuilds $beforeFont -> $digitalOn"
+  # The small size is where the segment gaps approach a pixel; keep a shot
+  # of each size for inspection.
+  Send "cmd size:small" | Out-Null
+  Start-Sleep 1
+  Shot "instr_digital_small"
+  Send "cmd size:large" | Out-Null
+  Start-Sleep 1
+  Shot "instr_digital_large"
+  Send "cmd size:medium" | Out-Null
+  Start-Sleep 1
+  $digitalOn = Field (Send "stats") 'rebuilds'
+  Start-Sleep 1
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $digitalClock = Send "stats"
+  $results += Check "digital clock idle: ~1 fps" ((Field $digitalClock 'fps') -ge 0.95 -and (Field $digitalClock 'fps') -le 1.2) $digitalClock
+  $results += Check "digital clock idle: ui pass under 2 ms" ((Field $digitalClock 'mean_ms') -lt 2.0) ("mean " + (Field $digitalClock 'mean_ms') + " ms, max " + (Field $digitalClock 'max_ms') + " ms")
+  Send "cmd backdrop" | Out-Null
+  Start-Sleep 1
+  Shot "instr_digital_backdrop"
+  Send "cmd backdrop" | Out-Null
+  Send "cmd mode:stopwatch" | Out-Null
+  Start-Sleep 2
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $digitalIdle = Send "stats"
+  $results += Check "digital, stopwatch paused: no timed frames" ((Field $digitalIdle 'tick') -eq 0) $digitalIdle
+  Send "cmd digital" | Out-Null
+  Start-Sleep 1
+  $digitalOff = Field (Send "stats") 'rebuilds'
+  $results += Check "typeface again: exactly one rebuild" ($digitalOff -eq ($digitalOn + 1)) "rebuilds $digitalOn -> $digitalOff"
+  Send "cmd mode:clock" | Out-Null
 
   # --- H: night mode auto keeps an idle stopwatch asleep ---------------------
   # The next schedule boundary is hours away, so the only wake-up it adds
@@ -167,7 +213,7 @@ try {
   $results += Check "night auto, stopwatch paused: no timed frames" ((Field $nightIdle 'tick') -eq 0) $nightIdle
 
   # Back to the defaults so the restored config is what the user had.
-  foreach ($c in 'night:off', 'palette:default', '12h', 'date', 'mode:clock') { Send "cmd $c" | Out-Null }
+  foreach ($c in 'night:off', 'mode:clock') { Send "cmd $c" | Out-Null }
 }
 finally {
   if ($writer) { try { Send "quit" | Out-Null } catch {} }

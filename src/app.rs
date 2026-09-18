@@ -1,25 +1,25 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Galley, PointerButton, Pos2, Rect, Sense, Stroke,
-    StrokeKind, Vec2, ViewportCommand, WindowLevel, pos2, vec2,
+    self, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+    ViewportCommand, WindowLevel, pos2, vec2,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::clock::{ClockStyle, clock_readout};
 use crate::config::{self, Config};
+use crate::digital;
 use crate::instrument::{Cause, Instrument};
-use crate::layout::{self, DerivedLayout, Glyphs, LayoutKey, Metrics};
+use crate::layout::{DerivedLayout, Font, Glyph, LayoutKey, Metrics};
 use crate::night::{self, Schedule};
 use crate::placement;
+use crate::text::{display_family, install_display_font, measure_glyphs, paint_galley, spaced};
 use crate::theme::Theme;
 use crate::timer::{self, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
 
-const DISPLAY_FONT: &str = "display";
 /// How long a finished timer blinks before settling on a steady colour.
 const BLINK_FOR: Duration = Duration::from_secs(30);
 /// Timed wake-ups can fire more than one OS timer tick (~15.6 ms on Windows)
@@ -358,6 +358,7 @@ impl ChronoApp {
                 Mode::Timer => self.countdown.reset(),
             },
             Command::SetSize(size) => s.size = size,
+            Command::ToggleFont => s.font = s.font.toggled(),
             Command::ToggleBackdrop => s.backdrop = !s.backdrop,
             Command::ToggleOutline => s.text_outline = !s.text_outline,
             Command::ToggleChroma => s.chroma = !s.chroma,
@@ -439,6 +440,7 @@ impl ChronoApp {
             timer_minutes: s.timer_minutes,
             start_label,
             size: s.size,
+            font: s.font,
             backdrop: s.backdrop,
             text_outline: s.text_outline,
             chroma: s.chroma,
@@ -569,11 +571,15 @@ impl eframe::App for ChronoApp {
         let readout = self.readout(now, local);
         let painter = ui.painter().clone();
 
-        // Rebuilt only when the size or the display scale changes; every frame
-        // in between reads cached numbers.
+        // Rebuilt only when the size, face or display scale changes; every
+        // frame in between reads cached numbers. Only the typeface touches
+        // the font atlas; the digital face is pure geometry.
         let theme = self.theme;
-        let key = LayoutKey::new(s.size, ctx.pixels_per_point());
-        self.layout.ensure(key, &theme, |metrics| measure_glyphs(&ctx, metrics.font));
+        let key = LayoutKey::new(s.size, ctx.pixels_per_point(), s.font);
+        self.layout.ensure(key, &theme, |metrics| match s.font {
+            Font::Sans => measure_glyphs(&ctx, metrics.font),
+            Font::Digital => digital::glyphs(metrics.font, &theme.segments),
+        });
         let m = *self.layout.metrics();
         // A backdrop already separates the text from whatever is behind it.
         let halo = (s.text_outline && !s.backdrop).then_some(m.halo_width);
@@ -621,9 +627,16 @@ impl eframe::App for ChronoApp {
         let mut x = main_origin.x;
         for c in readout.main.chars() {
             let cell = self.layout.cell_width(c);
-            if let Some(galley) = self.layout.galley(c) {
-                let pos = pos2(x + (cell - galley.size().x) / 2.0, main_origin.y);
-                paint_galley(&painter, pos, galley.clone(), readout.color, halo, theme);
+            match self.layout.glyph(c) {
+                Some(Glyph::Text(galley)) => {
+                    let pos = pos2(x + (cell - galley.size().x) / 2.0, main_origin.y);
+                    paint_galley(&painter, pos, galley.clone(), readout.color, halo, theme);
+                }
+                // Already laid out inside its cell.
+                Some(Glyph::Digital(polygons)) => {
+                    digital::paint(&painter, pos2(x, main_origin.y), polygons, readout.color, halo, theme);
+                }
+                None => {}
             }
             x += cell;
         }
@@ -778,75 +791,6 @@ fn controls(
     clicked
 }
 
-/// Lays out every character a readout can contain, once per font size. Digits
-/// share the widest digit's cell so the readout doesn't jitter as it ticks,
-/// whatever the font's own digit metrics are.
-fn measure_glyphs(ctx: &egui::Context, font_size: f32) -> Glyphs {
-    let font = FontId::new(font_size, display_family());
-    ctx.fonts_mut(|fonts| {
-        let mut layout = |c: char| fonts.layout_no_wrap(c.to_string(), font.clone(), Color32::WHITE);
-        let digit_width = ('0'..='9').map(|d| layout(d).size().x).fold(0.0, f32::max);
-        let mut glyphs = Glyphs { digit_width, ..Default::default() };
-        for c in layout::READOUT_CHARS.chars() {
-            let galley = layout(c);
-            glyphs.height = glyphs.height.max(galley.size().y);
-            if !c.is_ascii_digit() {
-                glyphs.widths.insert(c, galley.size().x);
-            }
-            glyphs.galleys.insert(c, galley);
-        }
-        glyphs
-    })
-}
-
-/// Draws `galley`, optionally haloed by a dark edge `width` points thick.
-///
-/// egui has no outlined text, so the halo is offset copies of the glyph. Two
-/// rings of eight, the outer one fainter, read as a soft dark edge; a single
-/// hard ring at a width thin strokes can stand turns the readout into a hollow
-/// outline font instead.
-fn paint_galley(
-    painter: &egui::Painter,
-    pos: Pos2,
-    galley: Arc<Galley>,
-    color: Color32,
-    outline: Option<f32>,
-    theme: &Theme,
-) {
-    if let Some(width) = outline {
-        for (radius, alpha) in [(width, theme.color.halo[0]), (width * 2.1, theme.color.halo[1])] {
-            let diagonal = radius * std::f32::consts::FRAC_1_SQRT_2;
-            let ring = [
-                vec2(radius, 0.0),
-                vec2(-radius, 0.0),
-                vec2(0.0, radius),
-                vec2(0.0, -radius),
-                vec2(diagonal, diagonal),
-                vec2(diagonal, -diagonal),
-                vec2(-diagonal, diagonal),
-                vec2(-diagonal, -diagonal),
-            ];
-            let shade = Color32::from_black_alpha(alpha);
-            for offset in ring {
-                painter.galley_with_override_text_color(pos + offset, galley.clone(), shade);
-            }
-        }
-    }
-    painter.galley_with_override_text_color(pos, galley, color);
-}
-
-/// Letter-spaced caption ("T I M E R"-lite): thin spaces read cleaner at small sizes.
-fn spaced(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 4);
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 {
-            out.push('\u{2009}');
-        }
-        out.push(c);
-    }
-    out
-}
-
 /// Windows 11 draws a 1px border and rounds corners even on undecorated
 /// windows, which shows up as a faint box around a transparent overlay.
 #[cfg(windows)]
@@ -864,27 +808,4 @@ fn strip_window_chrome(_frame: &eframe::Frame) {}
 
 fn minutes(min: u64) -> Duration {
     Duration::from_secs(min * 60)
-}
-
-fn display_family() -> FontFamily {
-    FontFamily::Name(DISPLAY_FONT.into())
-}
-
-/// Uses a light system UI face for the readout when one is available, falling
-/// back to egui's bundled font so the app never depends on it.
-fn install_display_font(ctx: &egui::Context) {
-    const CANDIDATES: &[&str] = &[
-        r"C:\Windows\Fonts\segoeuisl.ttf",
-        r"C:\Windows\Fonts\segoeui.ttf",
-        "/System/Library/Fonts/SFNS.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-    ];
-    let mut fonts = egui::FontDefinitions::default();
-    let mut family = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-    if let Some(bytes) = CANDIDATES.iter().find_map(|path| std::fs::read(path).ok()) {
-        fonts.font_data.insert(DISPLAY_FONT.to_owned(), Arc::new(egui::FontData::from_owned(bytes)));
-        family.insert(0, DISPLAY_FONT.to_owned());
-    }
-    fonts.families.insert(display_family(), family);
-    ctx.set_fonts(fonts);
 }

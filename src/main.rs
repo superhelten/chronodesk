@@ -3,11 +3,13 @@
 mod app;
 mod clock;
 mod config;
+mod digital;
 mod icon;
 mod instrument;
 mod layout;
 mod night;
 mod placement;
+mod text;
 mod theme;
 mod timer;
 mod tray;

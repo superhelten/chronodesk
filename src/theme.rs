@@ -13,6 +13,30 @@ use crate::app::serde_by_id;
 pub struct Theme {
     pub color: Colors,
     pub ratio: Ratios,
+    pub segments: Segments,
+}
+
+/// Proportions of the seven-segment face, all relative to the main font
+/// size so it steps with the sizes exactly as the typeface does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Segments {
+    /// Height of the whole cell; the digit is centred in it.
+    pub line: f32,
+    pub height: f32,
+    pub width: f32,
+    pub thickness: f32,
+    /// Space left between the pointed ends of neighbouring segments.
+    pub gap: f32,
+    /// Horizontal shift per unit of height: the italic lean of the digits.
+    pub slant: f32,
+    /// Horizontal space between neighbouring cells.
+    pub spacing: f32,
+}
+
+impl Default for Segments {
+    fn default() -> Self {
+        Self { line: 1.0, height: 0.72, width: 0.40, thickness: 0.085, gap: 0.025, slant: 0.09, spacing: 0.16 }
+    }
 }
 
 /// Fixed colour presets. Only the readout colours differ; halo, backdrop and
@@ -83,6 +107,9 @@ pub struct Colors {
     /// Per-copy alpha of the two halo rings. They overlap, hence the low values:
     /// measured over pure white the halo lands near #464646, ~9:1 to the glyph.
     pub halo: [u8; 2],
+    /// The seven-segment face is haloed by a single stroke around each
+    /// segment instead of stacked copies, so it carries its own alpha.
+    pub halo_stroke: u8,
     pub backdrop: Color32,
     /// Must stay exactly #00FF00 for keying to work.
     pub chroma: Color32,
@@ -121,6 +148,7 @@ impl Default for Colors {
             caption_dim: 0.62,
             alert: Color32::from_rgb(245, 165, 36),
             halo: [34, 22],
+            halo_stroke: 160,
             backdrop: Color32::from_rgba_premultiplied(8, 8, 10, 178),
             chroma: Color32::from_rgb(0, 255, 0),
             hover_frame: Color32::from_white_alpha(46),
@@ -184,7 +212,17 @@ mod tests {
             assert_eq!(t.color.backdrop, base.color.backdrop, "{palette:?}");
             assert_eq!(t.color.control_base, base.color.control_base, "{palette:?}");
             assert_eq!(t.ratio, base.ratio, "{palette:?} must not change the layout");
+            assert_eq!(t.segments, base.segments, "{palette:?} must not change the digital face");
         }
+    }
+
+    #[test]
+    fn segments_fit_their_cell() {
+        let s = Segments::default();
+        assert!(s.height <= s.line, "the digit must fit the line box");
+        assert!(s.thickness * 2.0 < s.width, "two verticals must leave room between them");
+        assert!(s.thickness * 3.0 < s.height, "three horizontals must leave room between them");
+        assert!(s.gap < s.thickness);
     }
 
     #[test]

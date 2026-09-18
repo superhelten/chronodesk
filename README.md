@@ -24,6 +24,7 @@ Requires Rust 1.95+ (eframe 0.36).
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
 | Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop) |
 | 12-hour clock, date line | Menu → *Appearance* → *12-hour clock*, *Show date*. AM/PM sits on the caption line; with the date hidden the overlay shrinks to the time alone |
+| Digital font | Menu → *Appearance* → *Digital font*: seven-segment digits drawn as polygons, no font file involved. The caption stays in the typeface, like the printed labels on a real display |
 | Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool or Amber. Only the readout colours change; halo, backdrop and controls keep their contrast |
 | Night mode | Menu → *Appearance* → *Night mode*: Off, On, or Auto between `night_from` and `night_to` (22:00–07:00 by default). Dims the readout to `night_dim` (0.7; never below 0.6) |
 
@@ -32,7 +33,7 @@ Locking is disabled if the tray icon could not be created, and the app always st
 
 ## Configuration
 
-Settings (mode, timer length, size, backdrop, chroma, seconds, clock format, date line, colours,
+Settings (mode, timer length, size, font, backdrop, chroma, seconds, clock format, date line, colours,
 night mode and its schedule, always-on-top) and the window position are saved to `%APPDATA%\chronodesk\data\app.ron` (`~/Library/Application Support/...`
 on macOS), about 1.5 s after the last change and again on exit. The file is meant to be
 readable and hand-editable. Setting `CHRONODESK_CONFIG` to a path names the file outright,

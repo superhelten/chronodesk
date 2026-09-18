@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::app::{Mode, Size};
 use crate::clock::ClockFormat;
+use crate::layout::Font;
 use crate::night::{NightMode, TimeOfDay};
 use crate::theme::Palette;
 
@@ -47,6 +48,7 @@ pub struct Config {
     pub mode: Mode,
     pub timer_minutes: u64,
     pub size: Size,
+    pub font: Font,
     pub backdrop: bool,
     pub chroma: bool,
     pub show_seconds: bool,
@@ -75,6 +77,7 @@ impl Default for Config {
             mode: Mode::Clock,
             timer_minutes: 25,
             size: Size::Medium,
+            font: Font::Sans,
             backdrop: false,
             chroma: false,
             show_seconds: true,
@@ -206,6 +209,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "mode", &mut config.mode, &mut warnings);
     field(&mut fields, "timer_minutes", &mut config.timer_minutes, &mut warnings);
     field(&mut fields, "size", &mut config.size, &mut warnings);
+    field(&mut fields, "font", &mut config.font, &mut warnings);
     field(&mut fields, "backdrop", &mut config.backdrop, &mut warnings);
     field(&mut fields, "chroma", &mut config.chroma, &mut warnings);
     field(&mut fields, "show_seconds", &mut config.show_seconds, &mut warnings);
@@ -555,6 +559,32 @@ mod tests {
         assert!(!loaded.config.show_date, "other fields survive");
         assert_eq!(loaded.warnings.len(), 1);
         assert!(loaded.warnings[0].contains("clock_format"), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn config_without_font_field_keeps_the_typeface() {
+        let dir = Dir::new("font_default");
+        let path = dir.file();
+        write(&path, "(schema_version:1,size:\"large\")");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.font, Font::Sans);
+        assert_eq!(loaded.config.size, Size::Large);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn font_round_trips_as_an_id_and_tolerates_a_bad_value() {
+        let dir = Dir::new("font_roundtrip");
+        let path = dir.file();
+        save(&path, &Config { font: Font::Digital, ..Default::default() }).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("font: \"digital\""));
+        assert_eq!(load(&path).config.font, Font::Digital);
+
+        write(&path, "(schema_version:1,font:\"comic\",chroma:true)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.font, Font::Sans);
+        assert!(loaded.config.chroma);
+        assert!(loaded.warnings[0].contains("font"), "{:?}", loaded.warnings);
     }
 
     #[test]
