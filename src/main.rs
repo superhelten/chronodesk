@@ -11,6 +11,7 @@ mod layout;
 mod market;
 mod night;
 mod placement;
+mod ring;
 mod text;
 mod theme;
 mod timer;

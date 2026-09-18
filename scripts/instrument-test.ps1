@@ -273,6 +273,72 @@ try {
   $afterMarket = Send "stats"
   $results += Check "after market: stopwatch paused, no timed frames" ((Field $afterMarket 'tick') -eq 0) $afterMarket
 
+  # --- K: board arrangement and labels -----------------------------------------
+  # One line and exchange codes are outside the layout key; each costs a few
+  # new labels and no rebuild, and the strip is sized once like the stack.
+  Send "cmd mode:market" | Out-Null
+  Start-Sleep 1
+  $beforeStrip = Field (Send "stats") 'rebuilds'
+  Send "cmd horizontal" | Out-Null
+  Start-Sleep 2
+  Shot "instr_market_strip"
+  $s1 = Rect $proc
+  Start-Sleep 1
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $strip = Send "stats"
+  $s2 = Rect $proc
+  $results += Check "strip: ~1 fps, all ticks" ((Field $strip 'fps') -ge 0.95 -and (Field $strip 'fps') -le 1.2 -and (Field $strip 'tick') -eq (Field $strip 'frames')) $strip
+  $results += Check "strip: window size stable across ticks" ((($s1.R - $s1.L) -eq ($s2.R - $s2.L)) -and (($s1.B - $s1.T) -eq ($s2.B - $s2.T))) ("{0}x{1} -> {2}x{3}" -f ($s1.R - $s1.L), ($s1.B - $s1.T), ($s2.R - $s2.L), ($s2.B - $s2.T))
+  Send "cmd codes" | Out-Null
+  Start-Sleep 1
+  Shot "instr_market_strip_codes"
+  Send "cmd horizontal" | Out-Null
+  Start-Sleep 1
+  Shot "instr_market_codes"
+  $afterStrip = Field (Send "stats") 'rebuilds'
+  $results += Check "strip and codes: no layout rebuilds" ($afterStrip -eq $beforeStrip) "rebuilds $beforeStrip -> $afterStrip"
+  Send "cmd codes" | Out-Null
+
+  # --- L: the studio ring and the industrial palettes ---------------------------
+  # The ring adds a band, not a rebuild. With seconds hidden the digits change
+  # once a minute but the ring every second, so the clock is back to ~1 fps;
+  # a paused stopwatch has nothing moving and stays asleep, ring or not.
+  Send "cmd mode:clock" | Out-Null
+  Send "cmd seconds" | Out-Null
+  Start-Sleep 1
+  $beforeRing = Field (Send "stats") 'rebuilds'
+  Send "cmd ring" | Out-Null
+  Start-Sleep 2
+  Shot "instr_ring"
+  $afterRing = Field (Send "stats") 'rebuilds'
+  $results += Check "ring: no layout rebuild" ($afterRing -eq $beforeRing) "rebuilds $beforeRing -> $afterRing"
+  Start-Sleep 1
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $ringClock = Send "stats"
+  $results += Check "ring, minutes only: ~1 fps for the ring" ((Field $ringClock 'fps') -ge 0.95 -and (Field $ringClock 'fps') -le 1.2) $ringClock
+  $results += Check "ring: every frame is a scheduled tick" ((Field $ringClock 'tick') -eq (Field $ringClock 'frames')) ""
+  $results += Check "ring: ui pass under 2 ms" ((Field $ringClock 'mean_ms') -lt 2.0) ("mean " + (Field $ringClock 'mean_ms') + " ms, max " + (Field $ringClock 'max_ms') + " ms")
+  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_ring_backdrop"
+  foreach ($p in 'green', 'red', 'yellow', 'studio') {
+    Send "cmd palette:$p" | Out-Null
+    Start-Sleep 1
+    Shot "instr_palette_$p"
+  }
+  Send "cmd mode:stopwatch" | Out-Null; Start-Sleep 1; Shot "instr_studio_stopwatch"
+  Send "cmd size:small" | Out-Null; Start-Sleep 1; Shot "instr_ring_small"
+  Send "cmd size:large" | Out-Null; Start-Sleep 1; Shot "instr_ring_large"
+  Send "cmd size:medium" | Out-Null
+  Send "cmd backdrop" | Out-Null
+  Start-Sleep 2
+  Send "stats reset" | Out-Null
+  Start-Sleep 12
+  $ringPaused = Send "stats"
+  $results += Check "ring, stopwatch paused: no timed frames" ((Field $ringPaused 'tick') -eq 0) $ringPaused
+  Send "cmd digital" | Out-Null; Send "cmd mode:clock" | Out-Null; Start-Sleep 1; Shot "instr_ring_digital"; Send "cmd digital" | Out-Null
+  foreach ($c in 'palette:default', 'ring', 'seconds') { Send "cmd $c" | Out-Null }
+
   # Back to the defaults so the restored config is what the user had.
   foreach ($c in 'night:off', 'mode:clock') { Send "cmd $c" | Out-Null }
 }

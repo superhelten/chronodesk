@@ -80,6 +80,29 @@ impl Market {
         }
     }
 
+    /// The exchange's own short name, for a board that has to stay narrow.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NewYork => "NYSE",
+            Self::London => "LSE",
+            Self::Oslo => "OSE",
+            Self::Frankfurt => "XETRA",
+            Self::Mumbai => "NSE",
+            Self::Shanghai => "SSE",
+            Self::HongKong => "HKEX",
+            Self::Tokyo => "TSE",
+            Self::Sydney => "ASX",
+        }
+    }
+
+    /// The row label in the chosen style.
+    pub fn name(self, labels: Labels) -> &'static str {
+        match labels {
+            Labels::City => self.city(),
+            Labels::Code => self.code(),
+        }
+    }
+
     /// Menu label: city plus the exchange, since a city can host several.
     pub fn label(self) -> &'static str {
         match self {
@@ -124,6 +147,37 @@ impl Market {
     }
 }
 serde_by_id!(Market, "market");
+
+/// What names a row: the city, or the exchange's code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Labels {
+    #[default]
+    City,
+    Code,
+}
+
+impl Labels {
+    pub const ALL: [Self; 2] = [Self::City, Self::Code];
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.id().eq_ignore_ascii_case(id))
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::City => "city",
+            Self::Code => "code",
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::City => Self::Code,
+            Self::Code => Self::City,
+        }
+    }
+}
+serde_by_id!(Labels, "board labels");
 
 /// Minutes since local midnight.
 const fn hm(hour: u16, minute: u16) -> u16 {
@@ -219,11 +273,14 @@ fn at_minute(minute: u16) -> NaiveTime {
 pub struct BoardStyle {
     pub format: ClockFormat,
     pub show_seconds: bool,
+    pub labels: Labels,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub market: Market,
+    /// City or exchange code, as the style asks.
+    pub label: &'static str,
     /// Readout characters only, so the glyph cache covers it.
     pub time: String,
     /// `AM`/`PM` in twelve-hour mode.
@@ -259,14 +316,14 @@ pub fn board(utc: NaiveDateTime, markets: &[Market], style: BoardStyle) -> Board
                 (ClockFormat::H12, true) => (local.format("%-I:%M:%S").to_string(), Some(period(local.time()))),
                 (ClockFormat::H12, false) => (local.format("%-I:%M").to_string(), Some(period(local.time()))),
             };
-            Row { market, time, period, status: session.status(local) }
+            Row { market, label: market.name(style.labels), time, period, status: session.status(local) }
         })
         .collect();
 
     let caption = soonest
         .map(|(market, event, wait)| {
             let wait = wait.to_std().unwrap_or_default();
-            format!("{} {} IN {}", market.city(), event.verb(), countdown(wait))
+            format!("{} {} IN {}", market.name(style.labels), event.verb(), countdown(wait))
         })
         .unwrap_or_default();
 
@@ -301,11 +358,14 @@ pub fn countdown(wait: Duration) -> String {
 /// The widest captions the board can produce for `markets`, so the window
 /// can be sized once instead of following the countdown minute by minute.
 /// `digit` is the widest digit of the caption face.
-pub fn widest_captions(markets: &[Market], digit: char) -> Vec<String> {
+pub fn widest_captions(markets: &[Market], labels: Labels, digit: char) -> Vec<String> {
     let d = digit;
     markets
         .iter()
-        .flat_map(|m| [format!("{} CLOSES IN {d}{d}H {d}{d}M", m.city()), format!("{} OPENS IN {d}D {d}{d}H", m.city())])
+        .flat_map(|m| {
+            let name = m.name(labels);
+            [format!("{name} CLOSES IN {d}{d}H {d}{d}M"), format!("{name} OPENS IN {d}D {d}{d}H")]
+        })
         .collect()
 }
 
@@ -319,10 +379,11 @@ mod tests {
     }
 
     fn style(format: ClockFormat, show_seconds: bool) -> BoardStyle {
-        BoardStyle { format, show_seconds }
+        BoardStyle { format, show_seconds, labels: Labels::City }
     }
 
-    const H24: BoardStyle = BoardStyle { format: ClockFormat::H24, show_seconds: false };
+    const H24: BoardStyle = BoardStyle { format: ClockFormat::H24, show_seconds: false, labels: Labels::City };
+    const CODES: BoardStyle = BoardStyle { format: ClockFormat::H24, show_seconds: false, labels: Labels::Code };
 
     #[test]
     fn market_ids_round_trip_and_the_default_is_a_subset() {
@@ -334,6 +395,23 @@ mod tests {
         for market in Market::DEFAULT {
             assert!(Market::ALL.contains(&market));
         }
+        for labels in Labels::ALL {
+            assert_eq!(Labels::from_id(labels.id()), Some(labels));
+            assert_eq!(labels.toggled().toggled(), labels);
+        }
+    }
+
+    #[test]
+    fn exchange_codes_are_short_upper_case_and_distinct() {
+        let mut codes: Vec<&str> = Market::ALL.iter().map(|m| m.code()).collect();
+        for code in &codes {
+            assert!(code.len() <= 5 && code.chars().all(|c| c.is_ascii_uppercase()), "{code}");
+        }
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), Market::ALL.len(), "two exchanges share a code");
+        assert_eq!(Market::NewYork.name(Labels::City), "NEW YORK");
+        assert_eq!(Market::NewYork.name(Labels::Code), "NYSE");
     }
 
     #[test]
@@ -392,7 +470,7 @@ mod tests {
     #[test]
     fn the_board_shows_each_market_in_its_own_time() {
         let b = board(at(2026, 9, 18, 14, 0), &Market::DEFAULT, H24);
-        let rows: Vec<(&str, &str, Status)> = b.rows.iter().map(|r| (r.market.city(), r.time.as_str(), r.status)).collect();
+        let rows: Vec<(&str, &str, Status)> = b.rows.iter().map(|r| (r.label, r.time.as_str(), r.status)).collect();
         assert_eq!(
             rows,
             vec![
@@ -465,6 +543,16 @@ mod tests {
         assert_eq!(board(t, &Market::DEFAULT, style(ClockFormat::H24, true)).until_change, Duration::from_millis(750));
     }
 
+    /// With codes the rows and the caption both use them, so the caption
+    /// never names a market in a way the board does not.
+    #[test]
+    fn codes_name_the_rows_and_the_caption_alike() {
+        let b = board(at(2026, 9, 18, 14, 0), &Market::DEFAULT, CODES);
+        let labels: Vec<&str> = b.rows.iter().map(|r| r.label).collect();
+        assert_eq!(labels, vec!["NYSE", "LSE", "OSE", "TSE", "ASX"]);
+        assert_eq!(b.caption, "OSE CLOSES IN 30M");
+    }
+
     #[test]
     fn an_empty_board_has_no_caption() {
         let b = board(at(2026, 9, 18, 14, 0), &[], H24);
@@ -474,7 +562,8 @@ mod tests {
 
     #[test]
     fn widest_captions_cover_the_longest_shapes_for_every_market() {
-        let w = widest_captions(&[Market::NewYork, Market::HongKong], '0');
+        assert_eq!(widest_captions(&[Market::Oslo], Labels::Code, '8'), vec!["OSE CLOSES IN 88H 88M", "OSE OPENS IN 8D 88H"]);
+        let w = widest_captions(&[Market::NewYork, Market::HongKong], Labels::City, '0');
         assert_eq!(
             w,
             vec![

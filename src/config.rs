@@ -22,9 +22,10 @@ use ron::Value;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::app::{Mode, Size};
+use crate::board::Layout;
 use crate::clock::ClockFormat;
 use crate::layout::Font;
-use crate::market::Market;
+use crate::market::{Labels, Market};
 use crate::night::{NightMode, TimeOfDay};
 use crate::theme::{self, Palette};
 
@@ -70,6 +71,11 @@ pub struct Config {
     /// The market board's rows, top to bottom, by id (`"new-york"`, …).
     /// Never empty: a board with no rows is a mode that shows nothing.
     pub markets: Vec<Market>,
+    /// Rows stacked, or one line; city names or exchange codes.
+    pub board_layout: Layout,
+    pub board_labels: Labels,
+    /// Studio look: sixty LEDs around the readout, lit as the seconds pass.
+    pub seconds_ring: bool,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -95,6 +101,9 @@ impl Default for Config {
             night_to: TimeOfDay::new(7, 0).expect("valid"),
             night_dim: 0.7,
             markets: Market::DEFAULT.to_vec(),
+            board_layout: Layout::Vertical,
+            board_labels: Labels::City,
+            seconds_ring: false,
             window: None,
         }
     }
@@ -241,6 +250,9 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "night_to", &mut config.night_to, &mut warnings);
     field(&mut fields, "night_dim", &mut config.night_dim, &mut warnings);
     markets_field(&mut fields, &mut config.markets, &mut warnings);
+    field(&mut fields, "board_layout", &mut config.board_layout, &mut warnings);
+    field(&mut fields, "board_labels", &mut config.board_labels, &mut warnings);
+    field(&mut fields, "seconds_ring", &mut config.seconds_ring, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -758,6 +770,40 @@ mod tests {
         write(&path, "(schema_version:1,markets:[\"atlantis\"])");
         let loaded = load(&path);
         assert_eq!(loaded.config.markets, Market::DEFAULT.to_vec(), "nothing usable falls back to the default");
+    }
+
+    #[test]
+    fn board_layout_labels_and_ring_round_trip_and_default_quietly() {
+        let dir = Dir::new("board_style");
+        let path = dir.file();
+        write(&path, "(schema_version:1,markets:[\"oslo\"])");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.board_layout, Layout::Vertical);
+        assert_eq!(loaded.config.board_labels, Labels::City);
+        assert!(!loaded.config.seconds_ring);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let config = Config {
+            board_layout: Layout::Horizontal,
+            board_labels: Labels::Code,
+            seconds_ring: true,
+            palette: Palette::Studio,
+            ..Default::default()
+        };
+        save(&path, &config).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("board_layout: \"horizontal\""), "{text}");
+        assert!(text.contains("board_labels: \"code\""), "{text}");
+        assert!(text.contains("palette: \"studio\""), "{text}");
+        let loaded = load(&path);
+        assert_eq!(loaded.config, config);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        write(&path, "(schema_version:1,board_layout:\"diagonal\",seconds_ring:true)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.board_layout, Layout::Vertical, "a bad value falls back");
+        assert!(loaded.config.seconds_ring, "other fields survive");
+        assert!(loaded.warnings[0].contains("board_layout"), "{:?}", loaded.warnings);
     }
 
     #[test]

@@ -54,10 +54,19 @@ pub enum Palette {
     Warm,
     Cool,
     Amber,
+    /// Green LED matrix, the station-clock look.
+    Green,
+    /// Red seven-segment, the studio-counter look.
+    Red,
+    /// Yellow LED matrix.
+    Yellow,
+    /// Dual colour: green time, red counters and seconds ring.
+    Studio,
 }
 
 impl Palette {
-    pub const ALL: [Self; 4] = [Self::Default, Self::Warm, Self::Cool, Self::Amber];
+    pub const ALL: [Self; 8] =
+        [Self::Default, Self::Warm, Self::Cool, Self::Amber, Self::Green, Self::Red, Self::Yellow, Self::Studio];
 
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.id().eq_ignore_ascii_case(id))
@@ -69,6 +78,10 @@ impl Palette {
             Self::Warm => "warm",
             Self::Cool => "cool",
             Self::Amber => "amber",
+            Self::Green => "green",
+            Self::Red => "red",
+            Self::Yellow => "yellow",
+            Self::Studio => "studio",
         }
     }
 
@@ -78,6 +91,10 @@ impl Palette {
             Self::Warm => "Warm",
             Self::Cool => "Cool",
             Self::Amber => "Amber",
+            Self::Green => "Green matrix",
+            Self::Red => "Red seven-segment",
+            Self::Yellow => "Yellow matrix",
+            Self::Studio => "Studio (green / red)",
         }
     }
 }
@@ -91,18 +108,28 @@ impl Theme {
     pub fn resolve(palette: Palette, night_dim: Option<f32>, chroma: bool) -> Self {
         let mut theme = Self::default();
         let c = &mut theme.color;
-        (c.text, c.alert) = match palette {
-            Palette::Default => (c.text, c.alert),
-            Palette::Warm => (Color32::from_rgb(255, 221, 170), Color32::from_rgb(245, 120, 60)),
-            Palette::Cool => (Color32::from_rgb(200, 228, 255), Color32::from_rgb(255, 170, 60)),
-            Palette::Amber => (Color32::from_rgb(245, 180, 60), Color32::from_rgb(240, 80, 70)),
+        let led_green = Color32::from_rgb(80, 250, 100);
+        let led_red = Color32::from_rgb(255, 70, 60);
+        let led_yellow = Color32::from_rgb(255, 200, 40);
+        // Single-colour presets have one readout colour; the counters follow it.
+        let (text, alert, secondary) = match palette {
+            Palette::Default => (c.text, c.alert, None),
+            Palette::Warm => (Color32::from_rgb(255, 221, 170), Color32::from_rgb(245, 120, 60), None),
+            Palette::Cool => (Color32::from_rgb(200, 228, 255), Color32::from_rgb(255, 170, 60), None),
+            Palette::Amber => (Color32::from_rgb(245, 180, 60), Color32::from_rgb(240, 80, 70), None),
+            Palette::Green => (led_green, led_red, None),
+            Palette::Red => (led_red, led_yellow, None),
+            Palette::Yellow => (led_yellow, led_red, None),
+            Palette::Studio => (led_green, led_yellow, Some(led_red)),
         };
+        (c.text, c.alert, c.secondary) = (text, alert, secondary.unwrap_or(text));
         if chroma {
             c.open = c.text;
         }
         if let Some(dim) = night_dim.filter(|d| *d < 1.0) {
             c.text = c.text.gamma_multiply(dim);
             c.alert = c.alert.gamma_multiply(dim);
+            c.secondary = c.secondary.gamma_multiply(dim);
             c.open = c.open.gamma_multiply(dim);
         }
         theme
@@ -129,6 +156,11 @@ impl Theme {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Colors {
     pub text: Color32,
+    /// Stopwatch and timer digits, and the lit LEDs of the seconds ring. The
+    /// same as `text` except in a dual-colour preset.
+    pub secondary: Color32,
+    /// Unlit LEDs of the seconds ring: `secondary` at this alpha.
+    pub ring_unlit: u8,
     /// Applied to the caption when a backdrop makes full strength unnecessary.
     pub caption_dim: f32,
     /// Timer that has run out.
@@ -181,12 +213,18 @@ pub struct Ratios {
     pub board_gap: f32,
     pub board_dot: f32,
     pub board_ring: f32,
+    /// Seconds ring: LED radius relative to the caption font, and the band
+    /// the ring needs around the content as a multiple of that radius.
+    pub ring_dot: f32,
+    pub ring_band: f32,
 }
 
 impl Default for Colors {
     fn default() -> Self {
         Self {
             text: Color32::from_rgb(242, 242, 240),
+            secondary: Color32::from_rgb(242, 242, 240),
+            ring_unlit: 48,
             caption_dim: 0.62,
             alert: Color32::from_rgb(245, 165, 36),
             open: Color32::from_rgb(88, 214, 122),
@@ -225,6 +263,8 @@ impl Default for Ratios {
             board_gap: 0.9,
             board_dot: 0.28,
             board_ring: 0.12,
+            ring_dot: 0.16,
+            ring_band: 5.0,
         }
     }
 }
@@ -275,13 +315,44 @@ mod tests {
     }
 
     #[test]
-    fn palettes_differ_in_text_colour() {
-        let texts: Vec<_> = Palette::ALL.iter().map(|&p| Theme::resolve(p, None, false).color.text).collect();
-        for (i, a) in texts.iter().enumerate() {
-            for b in &texts[i + 1..] {
-                assert_ne!(a, b, "two presets share a text colour");
+    fn palettes_differ_in_their_readout_colours() {
+        let pairs: Vec<_> = Palette::ALL
+            .iter()
+            .map(|&p| {
+                let c = Theme::resolve(p, None, false).color;
+                (c.text, c.secondary)
+            })
+            .collect();
+        for (i, a) in pairs.iter().enumerate() {
+            for b in &pairs[i + 1..] {
+                assert_ne!(a, b, "two presets share their readout colours");
             }
         }
+    }
+
+    /// Only the dual-colour preset splits time from counters; every other
+    /// preset keeps one readout colour, so nothing about them changes.
+    #[test]
+    fn only_the_studio_preset_has_a_second_colour() {
+        for palette in Palette::ALL {
+            let c = Theme::resolve(palette, None, false).color;
+            if palette == Palette::Studio {
+                assert_ne!(c.secondary, c.text);
+                assert_ne!(c.secondary, c.alert, "counters must not read as an alarm");
+            } else {
+                assert_eq!(c.secondary, c.text, "{palette:?}");
+            }
+        }
+        let dim = Theme::resolve(Palette::Studio, Some(0.7), false).color;
+        let full = Theme::resolve(Palette::Studio, None, false).color;
+        assert!(dim.secondary.a() < full.secondary.a(), "night mode dims the counters too");
+    }
+
+    #[test]
+    fn ring_ratios_leave_room_for_the_dots() {
+        let r = Ratios::default();
+        assert!(r.ring_band >= 3.0, "the band must clear the dot on both sides");
+        assert!(r.ring_dot > 0.0 && r.ring_dot < r.board_dot);
     }
 
     #[test]

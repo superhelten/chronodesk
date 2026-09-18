@@ -85,6 +85,9 @@ pub struct Metrics {
     pub board_gap: f32,
     pub dot_radius: f32,
     pub ring_width: f32,
+    /// Seconds ring: LED radius, and the band it takes around the content.
+    pub led_radius: f32,
+    pub ring_band: f32,
 }
 
 impl Metrics {
@@ -107,6 +110,8 @@ impl Metrics {
             board_gap: caption_font * r.board_gap,
             dot_radius: caption_font * r.board_dot,
             ring_width: (caption_font * r.board_ring).max(1.0),
+            led_radius: (caption_font * r.ring_dot).max(1.0),
+            ring_band: (caption_font * r.ring_dot).max(1.0) * r.ring_band,
         }
     }
 }
@@ -332,6 +337,17 @@ mod tests {
             assert!(m.row_font > m.caption_font, "{size:?}: the time must outrank the city label");
         }
         assert_eq!(Metrics::new(Size::Small, &theme).row_font, theme.ratio.board_time_min);
+    }
+
+    #[test]
+    fn the_ring_band_clears_its_dots_at_every_size() {
+        let theme = Theme::default();
+        for size in Size::ALL {
+            let m = Metrics::new(size, &theme);
+            assert!(m.led_radius >= 1.0, "{size:?}");
+            assert!(m.ring_band >= m.led_radius * 3.0, "{size:?}: dots need room on both sides");
+            assert!(m.ring_band < m.font, "{size:?}: the band must stay a rim, not a frame");
+        }
     }
 
     #[test]

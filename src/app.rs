@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Timelike as _};
 use eframe::egui::{
     self, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
     ViewportCommand, WindowLevel, pos2, vec2,
@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::board;
 use crate::clock::{ClockStyle, clock_readout};
+use crate::ring;
 use crate::config::{self, Config};
 use crate::digital;
 use crate::instrument::{Cause, Instrument};
@@ -370,6 +371,9 @@ impl ChronoApp {
                 Mode::Timer => self.countdown.reset(),
             },
             Command::ToggleMarket(market) => toggle_market(&mut s.markets, market),
+            Command::ToggleBoardLayout => s.board_layout = s.board_layout.toggled(),
+            Command::ToggleBoardLabels => s.board_labels = s.board_labels.toggled(),
+            Command::ToggleRing => s.seconds_ring = !s.seconds_ring,
             Command::SetSize(size) => s.size = size,
             Command::ToggleFont => s.font = s.font.toggled(),
             Command::ToggleBackdrop => s.backdrop = !s.backdrop,
@@ -464,6 +468,9 @@ impl ChronoApp {
             palette: s.palette,
             night: s.night,
             markets: s.markets.clone(),
+            board_layout: s.board_layout,
+            board_labels: s.board_labels,
+            seconds_ring: s.seconds_ring,
             always_on_top: s.always_on_top,
         }
     }
@@ -478,26 +485,42 @@ impl ChronoApp {
         wake
     }
 
-    /// What to draw above the caption line, the caption, and when the display
-    /// next changes.
+    /// What to draw above the caption line, the caption, the seconds ring's
+    /// position, and when the display next changes.
+    ///
+    /// The clock is drawn in the primary colour, the counters in the
+    /// secondary one; they only differ in a dual-colour preset.
     fn readout(&self, now: Instant, local: DateTime<Local>) -> Readout {
         let s = &self.settings;
         let c = &self.theme.color;
-        let line = |main: String, caption: String, color: Color32, next_change: Option<Duration>| Readout {
+        let ring = s.seconds_ring;
+        let line = |main: String, caption: String, color: Color32, next_change: Option<Duration>, lit: usize| Readout {
             scene: Scene::Line { main, color },
             caption,
             next_change,
+            ring: ring.then_some(lit),
         };
         match s.mode {
             Mode::Clock => {
                 let style = ClockStyle { format: s.clock_format, show_seconds: s.show_seconds, show_date: s.show_date };
                 let clock = clock_readout(local, style);
-                line(clock.main, clock.caption, c.text, Some(clock.until_change))
+                // The ring moves every second even when the digits do not.
+                let mut next = clock.until_change;
+                if ring {
+                    let into_second = u64::from(local.nanosecond() % 1_000_000_000);
+                    next = next.min(Duration::from_nanos(1_000_000_000 - into_second));
+                }
+                line(clock.main, clock.caption, c.text, Some(next), ring::lit(local.second()))
             }
             Mode::Market => {
-                let style = BoardStyle { format: s.clock_format, show_seconds: s.show_seconds };
+                let style = BoardStyle { format: s.clock_format, show_seconds: s.show_seconds, labels: s.board_labels };
                 let board = market::board(local.naive_utc(), &s.markets, style);
-                Readout { scene: Scene::Board(board.rows), caption: board.caption, next_change: Some(board.until_change) }
+                Readout {
+                    scene: Scene::Board(board.rows),
+                    caption: board.caption,
+                    next_change: Some(board.until_change),
+                    ring: None,
+                }
             }
             Mode::Stopwatch => {
                 let elapsed = self.stopwatch.elapsed(now);
@@ -505,8 +528,9 @@ impl ChronoApp {
                 line(
                     timer::format_stopwatch(elapsed),
                     if running || elapsed.is_zero() { "STOPWATCH" } else { "PAUSED" }.into(),
-                    c.text,
+                    c.secondary,
                     running.then(|| timer::next_stopwatch_tick(elapsed)),
+                    ring::lit((elapsed.as_secs() % 60) as u32),
                 )
             }
             Mode::Timer => {
@@ -522,6 +546,7 @@ impl ChronoApp {
                         "TIME'S UP".into(),
                         if lit { c.alert } else { c.alert.gamma_multiply(0.25) },
                         blinking.then(|| Duration::from_millis(next)),
+                        0,
                     )
                 } else {
                     let running = cd.is_running(now);
@@ -532,11 +557,15 @@ impl ChronoApp {
                     } else {
                         "PAUSED".to_owned()
                     };
+                    // The ring drains with the digits: the seconds left in
+                    // the current minute, rounded up like the readout.
+                    let seconds_left = remaining.as_nanos().div_ceil(1_000_000_000) as u64;
                     line(
                         timer::format_countdown(remaining),
                         caption,
-                        c.text,
+                        c.secondary,
                         running.then(|| timer::next_countdown_tick(remaining)),
+                        ring::lit_remaining(seconds_left),
                     )
                 }
             }
@@ -556,6 +585,8 @@ struct Readout {
     scene: Scene,
     caption: String,
     next_change: Option<Duration>,
+    /// How many LEDs of the studio ring are lit, when it is on.
+    ring: Option<usize>,
 }
 
 /// Adds or removes a market, keeping the list in catalogue order around any
@@ -650,14 +681,17 @@ impl eframe::App for ChronoApp {
         let (scene_size, geometry) = match &readout.scene {
             Scene::Line { main, .. } => (vec2(self.layout.width_of(main), self.layout.glyphs().height), None),
             Scene::Board(rows) => {
-                let geo = board::measure(&mut self.layout, rows, &lay);
+                let geo = board::measure(&mut self.layout, rows, s.board_layout, s.board_labels, &lay);
                 (vec2(geo.size.x.max(geo.caption_min_width), geo.size.y), Some(geo))
             }
         };
         let theme = &theme;
 
+        // The seconds ring runs just inside the window edge, so the content
+        // moves in by the band it needs.
+        let inset = if readout.ring.is_some() { m.ring_band } else { 0.0 };
         let content = vec2(scene_size.x.max(caption_width), scene_size.y + caption_height);
-        let window_size = (content + m.pad * 2.0).ceil();
+        let window_size = (content + (m.pad + Vec2::splat(inset)) * 2.0).ceil();
         self.fit_window(&ctx, window_size);
 
         // Now that the real size is known, the saved position can be judged
@@ -683,24 +717,30 @@ impl eframe::App for ChronoApp {
         // chroma key wants opaque text, since anything translucent keys as a
         // green tint.
         let dim_captions = halo.is_none() && !s.chroma;
-        let scene_top = rect.top() + m.pad.y;
+        if let Some(lit) = readout.ring {
+            paint_ring(&painter, rect, &m, theme, lit, halo, s.backdrop);
+        }
+        let inner = rect.shrink(inset);
+        let scene_top = inner.top() + m.pad.y;
         let caption_color = match &readout.scene {
             Scene::Line { main, color } => {
-                let origin = pos2(rect.center().x - scene_size.x / 2.0, scene_top);
+                let origin = pos2(inner.center().x - scene_size.x / 2.0, scene_top);
                 paint_readout(&painter, origin, main, self.layout.glyphs(), *color, halo, theme);
-                if *color == theme.color.text && dim_captions { theme.dim_caption(*color) } else { *color }
+                // A plain readout colour dims with its caption; an alarm does not.
+                let plain = *color == theme.color.text || *color == theme.color.secondary;
+                if plain && dim_captions { theme.dim_caption(*color) } else { *color }
             }
             Scene::Board(rows) => {
                 let geo = geometry.expect("measured with the board");
-                let origin = pos2(rect.center().x - geo.size.x / 2.0, scene_top);
+                let origin = pos2(inner.center().x - geo.size.x / 2.0, scene_top);
                 board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, halo, dim_captions, &lay);
                 if dim_captions { theme.dim_caption(theme.color.text) } else { theme.color.text }
             }
         };
 
         let caption_rect = Rect::from_min_size(
-            pos2(rect.left(), scene_top + scene_size.y),
-            vec2(rect.width(), caption_height),
+            pos2(inner.left(), scene_top + scene_size.y),
+            vec2(inner.width(), caption_height),
         );
         let show_controls = hovered && s.mode.has_controls();
         let mut pending = None;
@@ -781,6 +821,28 @@ impl ChronoApp {
         if self.window_size != Some(size) {
             self.window_size = Some(size);
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(size));
+        }
+    }
+}
+
+/// The studio seconds ring: sixty LEDs along the window's outline, the
+/// first `lit` of them on, clockwise from the top. Unlit LEDs are only drawn
+/// over a backdrop; over a bare desktop they would be sixty specks of noise,
+/// and under a halo sixty dark rims.
+fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, lit: usize, halo: Option<f32>, backdrop: bool) {
+    let track = rect.shrink(m.ring_band / 2.0);
+    let corner = (m.corner - m.ring_band / 2.0).max(0.0);
+    let on = theme.color.secondary;
+    let off = on.gamma_multiply(f32::from(theme.color.ring_unlit) / 255.0);
+    let shade = Color32::from_black_alpha(theme.color.halo_stroke);
+    for (i, centre) in ring::dots(track, corner).into_iter().enumerate() {
+        if i < lit {
+            if let Some(h) = halo {
+                painter.circle_filled(centre, m.led_radius + h, shade);
+            }
+            painter.circle_filled(centre, m.led_radius, on);
+        } else if backdrop {
+            painter.circle_filled(centre, m.led_radius, off);
         }
     }
 }

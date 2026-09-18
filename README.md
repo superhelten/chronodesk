@@ -21,12 +21,13 @@ Requires Rust 1.95+ (eframe 0.36).
 | Start / pause, reset | Hover the overlay in Stopwatch/Timer mode, or `Space` / `R` when focused |
 | Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer · `4` Markets |
 | Timer duration | Menu → *Timer duration*, or scroll over an idle timer (±1 min per notch) |
-| Market board | Mode *Markets*: one row per exchange with its local time and a status dot (filled green = trading, amber = midday break, hollow = closed), and the next open or close across the board on the caption line. Menu → *Exchanges* picks the rows |
+| Market board | Mode *Markets*: one row per exchange with its local time and a status dot (filled green = trading, amber = midday break, hollow = closed), and the next open or close across the board on the caption line. Menu → *Exchanges* picks the rows, *One line* lays them out as a strip, *Exchange codes* swaps city names for NYSE, LSE, OSE… |
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
 | Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop). Off under a backdrop or a chroma key, where a dark rim would only leave a fringe once the green is keyed out |
 | 12-hour clock, date line | Menu → *Appearance* → *12-hour clock*, *Show date*. AM/PM sits on the caption line; with the date hidden the overlay shrinks to the time alone |
 | Digital font | Menu → *Appearance* → *Digital font*: seven-segment digits drawn as polygons, no font file involved. The caption stays in the typeface, like the printed labels on a real display |
-| Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool or Amber. Only the readout colours change; halo, backdrop and controls keep their contrast |
+| Seconds ring | Menu → *Appearance* → *Seconds ring*: sixty LEDs along the window's outline, lit clockwise from the top as the seconds pass, the way a studio clock shows them. Follows the clock, a running stopwatch, and a countdown (emptying with it). Unlit LEDs are only drawn over a backdrop |
+| Colours | Menu → *Appearance* → *Colours*: Default, Warm, Cool, Amber, or the industrial presets Green matrix, Red seven-segment, Yellow matrix and Studio (green time, red counters and ring). Only the readout colours change; halo, backdrop and controls keep their contrast |
 | Night mode | Menu → *Appearance* → *Night mode*: Off, On, or Auto between `night_from` and `night_to` (22:00–07:00 by default). Dims the readout to `night_dim` (0.7; never below 0.6) |
 
 While locked the overlay ignores the mouse entirely, so the tray icon is the way back.
@@ -48,7 +49,21 @@ jurisdiction change its daylight-saving law, the rule in `src/tz.rs` changes wit
 exactly as a bundled database would.
 
 Columns are sized for their widest possible values (two-digit hours, the longest countdown any
-listed exchange can produce), so the window never resizes as the clocks tick.
+listed exchange can produce), so the window never resizes as the clocks tick. *One line* turns the
+stack into a strip, each cell as wide as its own label; *Exchange codes* names the rows and the
+caption by the exchange instead of the city.
+
+### Studio look
+
+*Seconds ring* wraps the readout in sixty LEDs along the window's rounded outline. The ring lights
+clockwise from the top: one LED at :00, all sixty at :59. It follows the wall clock, a running
+stopwatch (seconds of the current minute), or a countdown, where it empties with the digits. With
+seconds hidden the ring still moves every second, so the clock is back to one frame per second; a
+paused counter has nothing moving and stays asleep.
+
+The *Studio* colour preset is the two-colour broadcast convention: the clock in green, the
+stopwatch, timer and ring in red. Every other preset draws the counters in the same colour as the
+clock. A green preset over the chroma key is the user's choice, and is keyed out like anything green.
 
 ## Configuration
 
@@ -73,7 +88,8 @@ automatically.
 `markets` is a list of exchange ids in display order (`["new-york", "london", "oslo", "tokyo", "sydney"]`),
 tolerant per element: a misspelt id drops that row with a warning, a duplicate is collapsed, and an
 empty list falls back to the default board. The *Exchanges* menu adds a row at its catalogue position
-among whatever order the file holds, and never removes the last one.
+among whatever order the file holds, and never removes the last one. `board_layout` is `"vertical"`
+or `"horizontal"`, `board_labels` is `"city"` or `"code"`, and `seconds_ring` is a boolean.
 
 ### Window placement
 
@@ -137,7 +153,8 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/layout.rs` – derived state: metrics and glyph measurements, rebuilt only when the size or display scale changes
 - `src/market.rs` – the exchange catalogue, sessions and the board readout as a pure function of UTC (unit-tested)
 - `src/tz.rs` – time zones as a fixed offset plus a daylight-saving rule, computed locally (unit-tested)
-- `src/board.rs` – the board's column geometry and painting
+- `src/board.rs` – the board's column geometry and painting, stacked or as a strip
+- `src/ring.rs` – the studio seconds ring: sixty LED positions along a rounded outline (unit-tested)
 - `src/config.rs` – the config file: atomic saves, field-tolerant loading
 - `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`
@@ -148,6 +165,7 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 
 - Repaints only when the display changes: 1 frame/s for the clock (landing just after each second),
   10 frames/s for a running stopwatch, none while paused, and one a minute for the market board with
-  seconds hidden. Idle CPU is below Windows' accounting resolution.
+  seconds hidden. The seconds ring brings the clock back to 1 frame/s. Idle CPU is below Windows'
+  accounting resolution.
 - Memory: ~40 MB private working set / ~65 MB private bytes, almost all of it the graphics driver.
   glow was chosen after measuring: wgpu used 130–310 MB private working set.

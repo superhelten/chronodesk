@@ -11,10 +11,11 @@ use tray_icon::menu::{
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use crate::app::{Mode, Size};
+use crate::board::Layout;
 use crate::clock::ClockFormat;
 use crate::icon;
 use crate::layout::Font;
-use crate::market::Market;
+use crate::market::{Labels, Market};
 use crate::night::NightMode;
 use crate::theme::Palette;
 
@@ -39,6 +40,9 @@ pub enum Command {
     SetNight(NightMode),
     /// Adds the exchange to the market board, or removes it.
     ToggleMarket(Market),
+    ToggleBoardLayout,
+    ToggleBoardLabels,
+    ToggleRing,
     ToggleOnTop,
     Quit,
 }
@@ -56,6 +60,9 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "12h" => Command::ToggleClockFormat,
         "date" => Command::ToggleDate,
         "digital" => Command::ToggleFont,
+        "ring" => Command::ToggleRing,
+        "horizontal" => Command::ToggleBoardLayout,
+        "codes" => Command::ToggleBoardLabels,
         "ontop" => Command::ToggleOnTop,
         "quit" => Command::Quit,
         _ => {
@@ -92,6 +99,9 @@ pub struct MenuState {
     pub palette: Palette,
     pub night: NightMode,
     pub markets: Vec<Market>,
+    pub board_layout: Layout,
+    pub board_labels: Labels,
+    pub seconds_ring: bool,
     pub always_on_top: bool,
 }
 
@@ -102,6 +112,9 @@ pub struct Tray {
     modes: Vec<(Mode, CheckMenuItem)>,
     presets: Vec<(u64, CheckMenuItem)>,
     markets: Vec<(Market, CheckMenuItem)>,
+    horizontal: CheckMenuItem,
+    codes: CheckMenuItem,
+    ring: CheckMenuItem,
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
@@ -173,6 +186,9 @@ impl Tray {
         let nights: Vec<_> =
             NightMode::ALL.into_iter().map(|n| (n, check(&format!("night:{}", n.id()), n.label()))).collect();
         let digital = check("digital", "Digital font");
+        let ring = check("ring", "Seconds ring");
+        let horizontal = check("horizontal", "One line");
+        let codes = check("codes", "Exchange codes");
         let backdrop = check("backdrop", "Backdrop");
         let outline = check("outline", "Text outline");
         let chroma = check("chroma", "Chroma key background (#00FF00)");
@@ -183,7 +199,9 @@ impl Tray {
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
         let preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
-        let market_refs: Vec<&dyn IsMenuItem> = markets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let m1 = PredefinedMenuItem::separator();
+        let mut market_refs: Vec<&dyn IsMenuItem> = vec![&horizontal, &codes, &m1];
+        market_refs.extend(markets.iter().map(|(_, i)| i as &dyn IsMenuItem));
         let size_refs: Vec<&dyn IsMenuItem> = sizes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let palette_refs: Vec<&dyn IsMenuItem> = palettes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let night_refs: Vec<&dyn IsMenuItem> = nights.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
@@ -197,12 +215,13 @@ impl Tray {
         // top level stays the short list it was.
         let sep = PredefinedMenuItem::separator;
         let a1 = sep();
-        let appearance_items: [&dyn IsMenuItem; 11] = [
+        let appearance_items: [&dyn IsMenuItem; 12] = [
             &size_menu,
             &palette_menu,
             &night_menu,
             &a1,
             &digital,
+            &ring,
             &backdrop,
             &outline,
             &chroma,
@@ -247,6 +266,9 @@ impl Tray {
             modes,
             presets,
             markets,
+            horizontal,
+            codes,
+            ring,
             start_pause,
             reset,
             sizes,
@@ -295,6 +317,11 @@ impl Tray {
             // The board is never left empty, so its last row cannot be unchecked.
             item.set_enabled(!(state.markets.len() == 1 && state.markets[0] == *market));
         }
+        self.horizontal.set_checked(state.board_layout == Layout::Horizontal);
+        self.codes.set_checked(state.board_labels == Labels::Code);
+        self.ring.set_checked(state.seconds_ring);
+        // The board has no seconds to show.
+        self.ring.set_enabled(state.mode != Mode::Market);
         let has_controls = state.mode.has_controls();
         self.start_pause.set_text(state.start_label);
         self.start_pause.set_enabled(has_controls);
@@ -402,6 +429,9 @@ mod tests {
             assert_eq!(parse_command(&format!("market:{}", market.id())), Some(Command::ToggleMarket(market)));
         }
         assert_eq!(parse_command("market:atlantis"), None);
+        assert_eq!(parse_command("horizontal"), Some(Command::ToggleBoardLayout));
+        assert_eq!(parse_command("codes"), Some(Command::ToggleBoardLabels));
+        assert_eq!(parse_command("ring"), Some(Command::ToggleRing));
     }
 
     #[test]
