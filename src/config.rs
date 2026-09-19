@@ -28,6 +28,7 @@ use crate::layout::Font;
 use crate::market::{Labels, Market};
 use crate::night::{NightMode, TimeOfDay};
 use crate::theme::{self, Palette};
+use crate::timer::Saved;
 
 /// Bump when the meaning of a field changes; add a migration step for it.
 /// Schema 0 is eframe's own persistence file, handled by [`migrate_from_eframe`].
@@ -78,6 +79,10 @@ pub struct Config {
     pub seconds_ring: bool,
     /// Chime when the countdown reaches zero (the system's notification sound).
     pub timer_sound: bool,
+    /// A stopwatch or countdown that was under way, so it survives a restart
+    /// or a logout. Written by the app, not meant to be edited; `None` is idle.
+    pub stopwatch: Option<Saved>,
+    pub countdown: Option<Saved>,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -107,6 +112,8 @@ impl Default for Config {
             board_labels: Labels::City,
             seconds_ring: false,
             timer_sound: true,
+            stopwatch: None,
+            countdown: None,
             window: None,
         }
     }
@@ -257,6 +264,8 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "board_labels", &mut config.board_labels, &mut warnings);
     field(&mut fields, "seconds_ring", &mut config.seconds_ring, &mut warnings);
     field(&mut fields, "timer_sound", &mut config.timer_sound, &mut warnings);
+    field(&mut fields, "stopwatch", &mut config.stopwatch, &mut warnings);
+    field(&mut fields, "countdown", &mut config.countdown, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -829,6 +838,31 @@ mod tests {
         assert!(loaded.config.timer_sound, "a bad value falls back");
         assert_eq!(loaded.config.timer_minutes, 5, "other fields survive");
         assert!(loaded.warnings[0].contains("timer_sound"), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn a_timer_under_way_round_trips_and_a_bad_one_is_dropped() {
+        let dir = Dir::new("timers");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        let loaded = load(&path);
+        assert_eq!((loaded.config.stopwatch, loaded.config.countdown), (None, None));
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let config = Config {
+            stopwatch: Some(Saved { accumulated_ms: 61_500, started_at_ms: None }),
+            countdown: Some(Saved { accumulated_ms: 0, started_at_ms: Some(1_800_000_000_000) }),
+            ..Default::default()
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).config, config);
+
+        write(&path, "(schema_version:1,stopwatch:\"running\",countdown:Some((accumulated_ms:5,started_at_ms:None)),timer_minutes:5)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.stopwatch, None, "a bad value falls back to idle");
+        assert_eq!(loaded.config.countdown, Some(Saved { accumulated_ms: 5, started_at_ms: None }));
+        assert_eq!(loaded.config.timer_minutes, 5, "other fields survive");
+        assert!(loaded.warnings[0].contains("stopwatch"), "{:?}", loaded.warnings);
     }
 
     #[test]

@@ -9,8 +9,9 @@
 # muted machine too. It does play for real: expect three notification sounds.
 # The shortest timer is a minute, so the script takes about three.
 #
-# A fresh config opens the overlay at (80, 80); a real pointer resting there
-# shows up as `input=` frames and fails the frame counts. Move it and rerun.
+# The window is made click-through for the run (`passthrough on`): a fresh
+# config opens the overlay at (80, 80), and a real pointer resting or passing
+# there would otherwise show up as frames and fail the frame counts.
 #
 # Like lifecycle-test.ps1 it runs under its own CHRONODESK_CONFIG and leaves a
 # running overlay alone.
@@ -47,6 +48,7 @@ try {
   foreach ($i in 1..40) { Start-Sleep -Milliseconds 250; if (Test-Path $portFile) { break } }
   if (-not (Test-Path $portFile)) { throw "no instrument port published" }
   Connect ([int](Get-Content $portFile))
+  Send "passthrough on" | Out-Null
   Start-Sleep 1
 
   # --- A: a one-minute countdown, left running behind a paused stopwatch ------

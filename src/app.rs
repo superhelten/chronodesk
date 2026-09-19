@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local, Timelike as _};
 use eframe::egui::{
@@ -218,6 +218,14 @@ impl ChronoApp {
         let settings = loaded.config;
 
         install_display_font(&cc.egui_ctx);
+        // A counter that was under way picks up where the wall clock says it is.
+        let (now, wall) = (Instant::now(), SystemTime::now());
+        let duration = minutes(settings.timer_minutes);
+        let stopwatch = settings.stopwatch.map_or_else(Stopwatch::default, |saved| Stopwatch::restore(saved, now, wall));
+        let countdown = settings
+            .countdown
+            .map_or_else(|| Countdown::new(duration), |saved| Countdown::restore(duration, saved, now, wall));
+
         let autostart = Autostart::system();
         let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
         let autostart_on = (exe.as_deref().is_some_and(|exe| autostart.enabled(exe)), Instant::now());
@@ -226,7 +234,7 @@ impl ChronoApp {
         }
 
         Ok(Self {
-            countdown: Countdown::new(minutes(settings.timer_minutes)),
+            countdown,
             saved: settings.clone(),
             saved_position: settings.window,
             placement_pending: Some(PLACEMENT_DEFERRALS),
@@ -235,7 +243,7 @@ impl ChronoApp {
             config_path: config::config_path(),
             dirty_since: repaired.then(Instant::now),
             locked: false,
-            stopwatch: Stopwatch::default(),
+            stopwatch,
             alarm: Alarm::default(),
             chimes: 0,
             tray: Tray::new(&cc.egui_ctx),
@@ -371,7 +379,22 @@ impl ChronoApp {
         ));
     }
 
+    /// Mirrors the two counters into the settings and writes them out at once:
+    /// a logout or a power cut gives no notice, and the whole point is that a
+    /// running timer survives one. Called only after a command that touched a
+    /// counter, never per frame. That is enough, because a running counter is
+    /// saved as the moment it started, which does not change while it runs.
+    fn save_counters(&mut self, now: Instant) {
+        let wall = SystemTime::now();
+        let counters = (self.stopwatch.save(now, wall), self.countdown.save(now, wall));
+        if counters != (self.settings.stopwatch, self.settings.countdown) {
+            (self.settings.stopwatch, self.settings.countdown) = counters;
+            self.write_config();
+        }
+    }
+
     fn apply(&mut self, cmd: Command, ctx: &egui::Context, now: Instant) {
+        let counters_touched = matches!(cmd, Command::StartPause | Command::Reset | Command::SetTimerMinutes(_));
         let s = &mut self.settings;
         match cmd {
             Command::ToggleLock => {
@@ -417,6 +440,9 @@ impl ChronoApp {
             }
             Command::ToggleAutostart => self.toggle_autostart(now),
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
+        }
+        if counters_touched {
+            self.save_counters(now);
         }
         // The OS flips check items on click; re-assert our state.
         self.tray.invalidate();
@@ -806,6 +832,7 @@ impl eframe::App for ChronoApp {
             vec2(inner.width(), caption_height),
         );
         let show_controls = hovered && s.mode.has_controls();
+        let buttons = show_controls.then(|| control_rects(caption_rect, &m));
         let mut pending = None;
         if show_controls {
             pending = controls(ui, caption_rect, &m, theme, self.menu_state(now).start_label);
@@ -862,6 +889,28 @@ impl eframe::App for ChronoApp {
             Cause::Other
         };
         self.instrument.record_frame(frame_start.elapsed(), cause, self.layout.rebuilds(), self.chimes);
+        self.instrument.report_state(|| {
+            // Where the hover buttons are, in points, so a test clicks what is
+            // drawn instead of guessing at the layout.
+            let buttons = buttons.map_or_else(
+                || "controls=0".to_owned(),
+                |[(start, _), (reset, _)]| {
+                    let (a, b) = (start.center(), reset.center());
+                    format!("controls=1 start_x={:.1} start_y={:.1} reset_x={:.1} reset_y={:.1}", a.x, a.y, b.x, b.y)
+                },
+            );
+            format!(
+                "mode={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
+                self.settings.mode.id(),
+                rect.width(),
+                rect.height(),
+                u8::from(self.stopwatch.is_running()),
+                self.stopwatch.elapsed(now).as_millis(),
+                u8::from(self.countdown.is_running(now)),
+                u8::from(self.countdown.is_finished(now)),
+                self.countdown.remaining(now).as_millis(),
+            )
+        });
 
         // Last: this blocks in a native modal loop until the menu closes.
         if background.secondary_clicked() {
@@ -934,6 +983,16 @@ fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, l
     }
 }
 
+/// Where the two hover buttons sit within the caption line.
+fn control_rects(area: Rect, metrics: &Metrics) -> [(Rect, Command); 2] {
+    let (size, gap) = (metrics.control, metrics.control_gap);
+    let center = area.center();
+    [
+        (Rect::from_center_size(center - vec2((size + gap) / 2.0, 0.0), Vec2::splat(size)), Command::StartPause),
+        (Rect::from_center_size(center + vec2((size + gap) / 2.0, 0.0), Vec2::splat(size)), Command::Reset),
+    ]
+}
+
 /// Start/pause and reset buttons, drawn as shapes so no icon font is needed.
 fn controls(
     ui: &mut egui::Ui,
@@ -942,14 +1001,9 @@ fn controls(
     theme: &Theme,
     start_label: &str,
 ) -> Option<Command> {
-    let (size, gap) = (metrics.control, metrics.control_gap);
-    let center = area.center();
-    let buttons = [
-        (Rect::from_center_size(center - vec2((size + gap) / 2.0, 0.0), Vec2::splat(size)), Command::StartPause),
-        (Rect::from_center_size(center + vec2((size + gap) / 2.0, 0.0), Vec2::splat(size)), Command::Reset),
-    ];
+    let size = metrics.control;
     let mut clicked = None;
-    for (rect, cmd) in buttons {
+    for (rect, cmd) in control_rects(area, metrics) {
         // A stable id per button: `format!` here would allocate every frame.
         let id = ui.id().with(match cmd {
             Command::StartPause => "start_pause",

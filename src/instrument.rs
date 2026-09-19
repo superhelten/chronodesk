@@ -118,6 +118,8 @@ mod imp {
         place: Option<Pos2>,
         /// What the last placement check decided, read back by `placement`.
         placement: String,
+        /// The counters and the hover buttons as of the last frame, read back by `state`.
+        state: String,
         telemetry: Telemetry,
         window_start: Option<Instant>,
     }
@@ -236,6 +238,13 @@ mod imp {
             let Some(shared) = &self.shared else { return };
             shared.lock().expect("instrument lock").placement = report;
         }
+
+        /// Takes a closure so an ordinary run never formats the line.
+        pub fn report_state(&self, state: impl FnOnce() -> String) {
+            let Some(shared) = &self.shared else { return };
+            let state = state();
+            shared.lock().expect("instrument lock").state = state;
+        }
     }
 
     fn serve(stream: TcpStream, shared: &Arc<Mutex<Shared>>, ctx: &egui::Context) {
@@ -312,6 +321,15 @@ mod imp {
                     shared.placement.clone()
                 }
             }
+            // As of the last frame drawn. Every reply queues another frame, so
+            // a second read is never stale.
+            "state" => {
+                if shared.state.is_empty() {
+                    "err no frame yet".to_owned()
+                } else {
+                    shared.state.clone()
+                }
+            }
             "stats" => {
                 let window = shared.window_start.map(|t| t.elapsed()).unwrap_or_default();
                 if parts.next() == Some("reset") {
@@ -324,6 +342,18 @@ mod imp {
                     shared.telemetry.report(window)
                 }
             }
+            // The real pointer belongs to whoever is using the machine. With
+            // the window click-through it never reaches the app, so a mouse
+            // resting on the overlay can neither steal the synthetic hover nor
+            // add frames to a measurement. Injected events are unaffected:
+            // they never pass through the OS.
+            "passthrough" => match parts.next() {
+                Some(arg @ ("on" | "off")) => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(arg == "on"));
+                    "ok".to_owned()
+                }
+                _ => "err usage: passthrough on | off".to_owned(),
+            },
             "quit" => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 "ok".to_owned()
@@ -370,6 +400,8 @@ mod imp {
         }
 
         pub fn set_placement_report(&self, _report: String) {}
+
+        pub fn report_state(&self, _state: impl FnOnce() -> String) {}
     }
 }
 

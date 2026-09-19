@@ -1,7 +1,26 @@
 //! Pure stopwatch / countdown logic. Every method takes `now` explicitly so the
 //! behaviour is deterministic and unit-testable.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
+
+/// A stopwatch as it is written to the config file, so one that is running
+/// outlives the process. An `Instant` means nothing to the next process, and
+/// after a reboot it may not even be representable, so a running stopwatch is
+/// anchored to the wall clock instead: what it had counted when it was last
+/// started, and when that was. Whatever time passes before the next launch is
+/// then simply part of the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Saved {
+    pub accumulated_ms: u64,
+    /// Milliseconds since the Unix epoch; `None` while paused.
+    pub started_at_ms: Option<u64>,
+}
+
+fn epoch_ms(wall: SystemTime) -> u64 {
+    wall.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+}
 
 #[derive(Debug, Default, Clone)]
 pub struct Stopwatch {
@@ -40,6 +59,31 @@ impl Stopwatch {
 
     pub fn reset(&mut self) {
         *self = Self::default();
+    }
+
+    /// What to write down so [`Self::restore`] can pick up from here; `None`
+    /// for a stopwatch that has nothing on it. `wall` is the same moment as
+    /// `now`, read from the wall clock.
+    pub fn save(&self, now: Instant, wall: SystemTime) -> Option<Saved> {
+        if self.started.is_none() && self.accumulated.is_zero() {
+            return None;
+        }
+        let running_for = self.started.map(|s| now.saturating_duration_since(s));
+        Some(Saved {
+            accumulated_ms: self.accumulated.as_millis().min(u128::from(u64::MAX)) as u64,
+            started_at_ms: running_for.map(|d| epoch_ms(wall).saturating_sub(d.as_millis() as u64)),
+        })
+    }
+
+    /// The time since the anchor is folded into what had been counted and the
+    /// run continues from `now`. An anchor in the future (the clock was set
+    /// back in between) counts as no time passed rather than as an error.
+    pub fn restore(saved: Saved, now: Instant, wall: SystemTime) -> Self {
+        let away = saved.started_at_ms.map_or(0, |at| epoch_ms(wall).saturating_sub(at));
+        Self {
+            accumulated: Duration::from_millis(saved.accumulated_ms.saturating_add(away)),
+            started: saved.started_at_ms.map(|_| now),
+        }
     }
 }
 
@@ -97,6 +141,17 @@ impl Countdown {
 
     pub fn reset(&mut self) {
         self.clock.reset();
+    }
+
+    /// The duration is not part of it: that is `timer_minutes`, saved already.
+    pub fn save(&self, now: Instant, wall: SystemTime) -> Option<Saved> {
+        self.clock.save(now, wall)
+    }
+
+    /// A countdown that ran out while nothing was running comes back finished,
+    /// with the overtime it would have had.
+    pub fn restore(duration: Duration, saved: Saved, now: Instant, wall: SystemTime) -> Self {
+        Self { duration, clock: Stopwatch::restore(saved, now, wall) }
     }
 }
 
@@ -244,6 +299,100 @@ mod tests {
 
     fn ms(v: u64) -> Duration {
         Duration::from_millis(v)
+    }
+
+    fn wall(secs: u64) -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_800_000_000 + secs)
+    }
+
+    #[test]
+    fn a_running_stopwatch_counts_the_time_it_was_away() {
+        let t0 = Instant::now();
+        let mut sw = Stopwatch::default();
+        assert_eq!(sw.save(t0, wall(0)), None, "nothing on it, nothing to save");
+        sw.start(t0);
+        sw.pause(t0 + ms(10_000));
+        sw.start(t0 + ms(15_000));
+        // Saved four seconds into the second run; the anchor is where that run began.
+        let saved = sw.save(t0 + ms(19_000), wall(19)).unwrap();
+        assert_eq!(saved, Saved { accumulated_ms: 10_000, started_at_ms: Some(epoch_ms(wall(15))) });
+
+        // Another process, another `Instant` epoch, fifty seconds later.
+        let t1 = Instant::now();
+        let back = Stopwatch::restore(saved, t1, wall(65));
+        assert!(back.is_running());
+        assert_eq!(back.elapsed(t1), ms(60_000));
+        assert_eq!(back.elapsed(t1 + ms(500)), ms(60_500), "and it keeps counting");
+        assert_eq!(back.save(t1, wall(65)).unwrap().accumulated_ms, 60_000);
+    }
+
+    #[test]
+    fn a_paused_stopwatch_comes_back_as_it_was() {
+        let t0 = Instant::now();
+        let mut sw = Stopwatch::default();
+        sw.start(t0);
+        sw.pause(t0 + ms(7_300));
+        let saved = sw.save(t0 + ms(9_000), wall(9)).unwrap();
+        assert_eq!(saved, Saved { accumulated_ms: 7_300, started_at_ms: None });
+        let t1 = Instant::now();
+        let back = Stopwatch::restore(saved, t1, wall(86_400));
+        assert!(!back.is_running());
+        assert_eq!(back.elapsed(t1 + ms(5_000)), ms(7_300));
+    }
+
+    #[test]
+    fn the_anchor_does_not_move_while_the_stopwatch_runs() {
+        // The app compares saved states to decide whether the file is stale.
+        let t0 = Instant::now();
+        let mut sw = Stopwatch::default();
+        sw.start(t0);
+        assert_eq!(sw.save(t0, wall(0)), sw.save(t0 + ms(30_000), wall(30)));
+    }
+
+    #[test]
+    fn a_clock_set_back_counts_as_no_time_away() {
+        let saved = Saved { accumulated_ms: 4_000, started_at_ms: Some(epoch_ms(wall(100))) };
+        let t1 = Instant::now();
+        let back = Stopwatch::restore(saved, t1, wall(40));
+        assert!(back.is_running());
+        assert_eq!(back.elapsed(t1), ms(4_000));
+        // Nonsense in the file saturates instead of overflowing.
+        let huge = Saved { accumulated_ms: u64::MAX, started_at_ms: Some(0) };
+        assert!(Stopwatch::restore(huge, t1, wall(0)).elapsed(t1 + ms(1)) > ms(0));
+    }
+
+    #[test]
+    fn a_countdown_resumes_with_the_time_away_taken_off() {
+        let t0 = Instant::now();
+        let mut cd = Countdown::new(Duration::from_secs(300));
+        assert_eq!(cd.save(t0, wall(0)), None);
+        cd.toggle(t0);
+        let saved = cd.save(t0 + ms(20_000), wall(20)).unwrap();
+
+        let t1 = Instant::now();
+        let back = Countdown::restore(Duration::from_secs(300), saved, t1, wall(120));
+        assert!(back.is_running(t1));
+        assert_eq!(back.remaining(t1), Duration::from_secs(180));
+        assert!(!back.is_idle());
+    }
+
+    #[test]
+    fn a_countdown_that_ran_out_while_away_comes_back_finished_and_quiet() {
+        let t0 = Instant::now();
+        let mut cd = Countdown::new(Duration::from_secs(60));
+        cd.toggle(t0);
+        let saved = cd.save(t0, wall(0)).unwrap();
+
+        let t1 = Instant::now();
+        let back = Countdown::restore(Duration::from_secs(60), saved, t1, wall(600));
+        assert_eq!(back.overtime(t1), Some(Duration::from_secs(540)));
+        assert!(!Alarm::default().due(back.overtime(t1)), "long past the blink window: no chime");
+
+        // Back within the half minute: the chime that is due now, not the ones missed.
+        let soon = Countdown::restore(Duration::from_secs(60), saved, t1, wall(75));
+        let mut alarm = Alarm::default();
+        assert!(alarm.due(soon.overtime(t1)));
+        assert!(!alarm.due(soon.overtime(t1 + ms(100))));
     }
 
     #[test]

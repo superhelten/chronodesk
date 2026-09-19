@@ -1,12 +1,20 @@
 # Drives ChronoDesk through its own instrument channel: no physical mouse, and
 # all timings read from inside the process.
+#
+# The window is made click-through for the run (`passthrough on`), so a real
+# pointer resting on or crossing it cannot disturb the synthetic one or add
+# frames to a measurement. Where the script needs to know that something has
+# happened it asks the app (`state`) instead of sleeping and hoping.
+#
+# Like the other scripts it runs under its own CHRONODESK_CONFIG and leaves a
+# running overlay, and its config, alone.
 $ErrorActionPreference = 'Stop'
 # Run after: cargo build --release --features instrument
 $s = Split-Path $MyInvocation.MyCommand.Path
 $exe = Join-Path (Split-Path $s) 'target\release\chronodesk.exe'
-$ron = "$env:APPDATA\chronodesk\data\app.ron"
+$scratch = Join-Path $env:TEMP 'chronodesk-instrument-test'
+$ron = Join-Path $scratch 'app.ron'
 $portFile = "$env:TEMP\chronodesk-instrument.port"
-$userBackup = "$s\user_app_instr.ron"
 
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -54,25 +62,43 @@ function Field($report, $name) {
   if ($report -match "$name=([0-9.]+)") { [double]$matches[1] } else { $null }
 }
 function Check($name, $ok, $detail) { "{0} {1}{2}" -f $(if ($ok) { 'PASS' } else { 'FAIL' }), $name, $(if ($detail) { " — $detail" } else { '' }) }
+# The coordinates are passed on as the app printed them, never through a
+# culture-dependent number format.
+function Text($report, $name) { if ($report -match "$name=(\S+)") { $matches[1] } else { $null } }
+# Asks until the app reports what is expected; the last answer either way.
+function WaitState([string]$pattern, [int]$timeoutMs = 5000) {
+  $deadline = (Get-Date).AddMilliseconds($timeoutMs)
+  do { $state = Send "state"; if ($state -match $pattern) { break }; Start-Sleep -Milliseconds 100 } while ((Get-Date) -lt $deadline)
+  $state
+}
+# Every reply queues a repaint, so two reads a moment apart must show the frame
+# count moving. If it does not, the app has stopped drawing altogether: its
+# window is minimised (Win+D) or its tray menu is open, which blocks the event
+# loop for as long as it stays open. Nothing measured after that means
+# anything, so the run stops with one line instead of a page of failures.
+function Assert-Drawing([string]$where) {
+  $a = Field (Send "stats") 'frames'; Start-Sleep -Milliseconds 400; $b = Field (Send "stats") 'frames'
+  if ($b -le $a) { throw "the app stopped drawing before '$where' (window minimised, or its tray menu left open?) - not a test failure; rerun" }
+}
 
-Copy-Item $ron $userBackup -ErrorAction SilentlyContinue
-$results = @()
+$results = @(); $proc = $null
 try {
-  Get-Process chronodesk -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
   Remove-Item $portFile -ErrorAction SilentlyContinue
+  New-Item -ItemType Directory -Force $scratch | Out-Null
   # Stopwatch mode so the hover controls exist; placed in a free corner.
   Set-Content $ron '(schema_version:1,mode:"stopwatch",timer_minutes:25,size:"medium",backdrop:false,chroma:false,show_seconds:true,always_on_top:true,text_outline:true,window:Some((x:40.0,y:40.0)))' -NoNewline
+  $env:CHRONODESK_CONFIG = $ron
   $proc = Start-Process $exe -ArgumentList '--instrument' -PassThru
+  $env:CHRONODESK_CONFIG = $null
   foreach ($i in 1..40) { Start-Sleep -Milliseconds 250; if (Test-Path $portFile) { break } }
   if (-not (Test-Path $portFile)) { throw "no instrument port published" }
   $port = [int](Get-Content $portFile)
   Connect $port
   $results += Check "channel: app publishes a port and answers" ((Send "stats") -match 'frames=') "port $port"
-
-  $r = Rect $proc
-  $w = $r.R - $r.L; $h = $r.B - $r.T
+  Send "passthrough on" | Out-Null
 
   # --- A: clock mode, nothing hovered: one frame per second -----------------
+  Assert-Drawing 'A: clock idle'
   Send "cmd mode:clock" | Out-Null
   Send "hover off" | Out-Null
   Start-Sleep 2
@@ -94,7 +120,14 @@ try {
   $results += Check "stopwatch paused: no timed frames at all" ((Field $paused 'tick') -eq 0) $paused
 
   # --- C: synthetic hover shows the controls without spinning ---------------
-  Send "hover $([int]($w / 2)) $([int]($h * 0.25))" | Out-Null
+  Assert-Drawing 'C: hover'
+  # The window's size in points comes from the app: the desktop's pixels are
+  # only the same thing at 100 % scaling.
+  $state = WaitState 'win_w='
+  $hx = [int]([double](Field $state 'win_w') / 2); $hy = [int]([double](Field $state 'win_h') / 4)
+  Send "hover $hx $hy" | Out-Null
+  $state = WaitState 'controls=1'
+  $results += Check "hover: the controls are drawn" ($state -match 'controls=1') $state
   Start-Sleep 1
   Shot "instr_hover"
   Send "stats reset" | Out-Null
@@ -103,14 +136,17 @@ try {
   $results += Check "hover held: no repaint spin" ((Field $hover 'fps') -le 1.0) $hover
 
   # --- D: synthetic click on the start button -------------------------------
-  $bx = [int](($w / 2) - 14); $by = [int]($h - 16)
-  Send "click $bx $by" | Out-Null
+  # Aimed at the centre of the button as the app drew it, and judged by what
+  # the stopwatch then says about itself; the frame rate is a separate matter.
+  Send "click $(Text $state 'start_x') $(Text $state 'start_y')" | Out-Null
+  $state = WaitState 'sw_running=1'
+  $results += Check "click: the start button starts the stopwatch" ($state -match 'sw_running=1') $state
   Start-Sleep 2
   Shot "instr_running"
   Send "stats reset" | Out-Null
   Start-Sleep 10
   $running = Send "stats"
-  $results += Check "click: stopwatch runs at ~10 fps" ((Field $running 'fps') -ge 9.5 -and (Field $running 'fps') -le 10.5) $running
+  $results += Check "running: stopwatch draws at ~10 fps" ((Field $running 'fps') -ge 9.5 -and (Field $running 'fps') -le 10.5) $running
   $results += Check "running: every frame is a scheduled tick" ((Field $running 'tick') -eq (Field $running 'frames')) ""
   $results += Check "running: ui pass under 2 ms" ((Field $running 'mean_ms') -lt 2.0) ("mean " + (Field $running 'mean_ms') + " ms, max " + (Field $running 'max_ms') + " ms")
 
@@ -133,6 +169,7 @@ try {
   $results += Check "clock again: back to ~1 fps" ((Field $back 'fps') -ge 0.95 -and (Field $back 'fps') -le 1.2) $back
 
   # --- G: appearance changes never re-measure text ---------------------------
+  Assert-Drawing 'G: appearance'
   # Colours, night mode, 12-hour clock and the date line are all outside the
   # layout key, so the rebuild count must not move. Size is the one thing
   # that does rebuild, and it is checked separately to prove the counter works.
@@ -213,6 +250,7 @@ try {
   $results += Check "night auto, stopwatch paused: no timed frames" ((Field $nightIdle 'tick') -eq 0) $nightIdle
 
   # --- J: the market board ----------------------------------------------------
+  Assert-Drawing 'J: market board'
   # Mode is outside the layout key (both faces are measured on every rebuild),
   # so switching to the board and back must not re-measure anything.
   foreach ($c in 'night:off', 'mode:clock') { Send "cmd $c" | Out-Null }
@@ -301,6 +339,7 @@ try {
   Send "cmd codes" | Out-Null
 
   # --- L: the studio ring and the industrial palettes ---------------------------
+  Assert-Drawing 'L: studio ring'
   # The ring adds a band, not a rebuild. With seconds hidden the digits change
   # once a minute but the ring every second, so the clock is back to ~1 fps;
   # a paused stopwatch has nothing moving and stays asleep, ring or not.
@@ -360,17 +399,15 @@ try {
   $results += Check "hardware dressing: ui pass under 2 ms" ((Field $hardware 'mean_ms') -lt 2.0) ("mean " + (Field $hardware 'mean_ms') + " ms, max " + (Field $hardware 'max_ms') + " ms")
   Send "cmd backdrop" | Out-Null; Send "cmd digital" | Out-Null
   foreach ($c in 'palette:default', 'ring', 'seconds') { Send "cmd $c" | Out-Null }
-
-  # Back to the defaults so the restored config is what the user had.
-  foreach ($c in 'night:off', 'mode:clock') { Send "cmd $c" | Out-Null }
 }
+catch { $results += "ABORT $_" }
 finally {
   if ($writer) { try { Send "quit" | Out-Null } catch {} }
   if ($client) { $client.Close() }
   Start-Sleep 1
-  Get-Process chronodesk -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
-  if (Test-Path $userBackup) { Copy-Item $userBackup $ron }
-  Start-Process $exe
+  if ($proc -and -not $proc.HasExited) { $proc.Kill() }
+  Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item $portFile -ErrorAction SilentlyContinue
 }
 $results
-"", ("{0} passed, {1} failed" -f ($results | ? { $_ -like 'PASS*' }).Count, ($results | ? { $_ -like 'FAIL*' }).Count)
+"", ("{0} passed, {1} failed{2}" -f ($results | ? { $_ -like 'PASS*' }).Count, ($results | ? { $_ -like 'FAIL*' }).Count, $(if ($results -like 'ABORT*') { ', run aborted' } else { '' }))

@@ -4,6 +4,8 @@
 /data
 app.ron
 
-# Screenshots and the config backup that scripts/instrument-test.ps1 leaves behind
+# Screenshots that scripts/instrument-test.ps1 leaves behind
 /scripts/*.png
+# A config backup from before that script ran under its own CHRONODESK_CONFIG;
+# it no longer writes one, but a copy may still be lying around.
 /scripts/user_app_instr.ron

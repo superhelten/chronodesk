@@ -21,6 +21,7 @@ Requires Rust 1.95+ (eframe 0.36).
 | Start / pause, reset | Hover the overlay in Stopwatch/Timer mode, or `Space` / `R` when focused |
 | Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer · `4` Markets |
 | Timer duration | Menu → *Timer duration*, or scroll over an idle timer (±1 min per notch) |
+| Restarts | A stopwatch or timer that is running keeps running across a restart of the app, a logout or a reboot: the time it was away is counted, and a paused one comes back as it was. A timer that ran out in the meantime comes back as *TIME'S UP*, without a chime unless it finished within the last half minute |
 | Timer sound | A finished timer blinks for half a minute and chimes three times, ten seconds apart, in whatever mode is showing. Menu → *Timer duration* → *Sound when finished* switches the chime off |
 | Market board | Mode *Markets*: one row per exchange with its local time and a status dot (filled green = trading, amber = midday break, hollow = closed), and the next open or close across the board on the caption line. Menu → *Exchanges* picks the rows, *One line* lays them out as a strip, *Exchange codes* swaps city names for NYSE, LSE, OSE… |
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
@@ -124,6 +125,15 @@ empty list falls back to the default board. The *Exchanges* menu adds a row at i
 among whatever order the file holds, and never removes the last one. `board_layout` is `"vertical"`
 or `"horizontal"`, `board_labels` is `"city"` or `"code"`, and `seconds_ring` and `timer_sound` are booleans.
 
+`stopwatch` and `countdown` are the app's own notes, not settings: `None` when idle, otherwise
+`Some((accumulated_ms: …, started_at_ms: …))` — what had been counted when it was last started, and
+when that was, in milliseconds since the Unix epoch (`None` while paused). An `Instant` means nothing
+to the next process, so a running counter is anchored to the wall clock, and the time until the next
+launch is simply part of the run. They are written the moment a counter is started, paused or reset
+rather than after the usual delay, because a logout or a power cut gives no notice; nothing is
+written while a counter merely runs. Setting the PC's clock back while the app is closed counts as
+no time away; setting it forward counts as time away.
+
 ### Window placement
 
 A saved position only means something against the monitors attached right now, so it is checked
@@ -158,8 +168,18 @@ pwsh -File scripts/instrument-test.ps1     # PowerShell 7: the script is UTF-8 w
 
 With the feature *and* the flag, the app listens on a loopback port and takes line commands:
 `cmd <menu-id>` (the same ids the menus use), `hover <x> <y>` / `hover off`, `click <x> <y>`,
-`place <x> <y>` / `placement`, `stats` / `stats reset`, `quit`. Synthetic pointer events are injected into egui's raw input, so
+`place <x> <y>` / `placement`, `stats` / `stats reset`, `state`, `passthrough on` / `off`, `quit`. Synthetic pointer events are injected into egui's raw input, so
 hovering and clicking take the same path as a real mouse.
+
+`state` reports what the last frame showed: mode, the window's size in points, both counters
+(`sw_running`, `sw_ms`, `cd_running`, `cd_finished`, `cd_remaining_ms`) and, while the hover buttons
+are drawn, their centres (`start_x`, `start_y`, `reset_x`, `reset_y`). The test script clicks the
+button where the app says it drew it and then asks whether the stopwatch is running, instead of
+deriving a pixel offset from the window rectangle and inferring the click from a frame rate.
+`passthrough on` makes the window click-through for the run, so a real pointer resting on or
+crossing the overlay can neither steal the synthetic hover nor add frames to a measurement;
+injected events never pass through the OS and are unaffected. The script runs under its own
+`CHRONODESK_CONFIG`, like the others, and leaves a running overlay and its config alone.
 
 `stats` reports frames, fps, mean/max time of the app's `ui()` pass, the gap between frames and a
 breakdown of why each frame was drawn (`tick`, `input`, `config`, `other`), plus two absolute counters
@@ -180,6 +200,15 @@ itself rather than against the app's own numbers.
 ```sh
 pwsh -File scripts/lifecycle-test.ps1
 ```
+
+```sh
+pwsh -File scripts/resume-test.ps1
+```
+
+kills a running stopwatch and a running countdown without notice, relaunches, and reads the counters
+back through `state`: running, with the time away on them to within the script's own timing; a
+paused stopwatch to the millisecond; a countdown whose end passed while nothing was running comes
+back finished and silent; a reset leaves nothing in the file. About a minute, no sound.
 
 ```sh
 pwsh -File scripts/chime-test.ps1
