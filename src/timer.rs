@@ -100,6 +100,54 @@ impl Countdown {
     }
 }
 
+/// How many times a finished countdown chimes, and how far apart. Three, inside
+/// the half minute the digits blink: enough to catch someone who looked away,
+/// then silence, since an overlay cannot be assumed to have anyone near it.
+pub const CHIMES: u32 = 3;
+pub const CHIME_EVERY: Duration = Duration::from_secs(10);
+
+/// Decides when a finished countdown is heard. Pure bookkeeping: it is told
+/// how far past zero the countdown is and answers whether to chime now.
+#[derive(Debug, Default, Clone)]
+pub struct Alarm {
+    /// Chimes accounted for in the current finish.
+    sounded: u32,
+}
+
+impl Alarm {
+    /// Call once per frame. True when a chime is owed; never twice for the
+    /// same one, and a frame that arrives late owes one chime, not a burst.
+    /// The alarm belongs to the half minute the digits blink: a first frame that
+    /// arrives after it (the sound was off, the countdown hidden behind a mode
+    /// that was asleep) owes nothing, or switching the sound on would beep for a
+    /// finish long past.
+    pub fn due(&mut self, overtime: Option<Duration>) -> bool {
+        let Some(over) = overtime else {
+            self.sounded = 0;
+            return false;
+        };
+        if over >= CHIME_EVERY * CHIMES {
+            self.sounded = CHIMES;
+            return false;
+        }
+        let owed = ((over.as_millis() / CHIME_EVERY.as_millis()) as u32 + 1).min(CHIMES);
+        let chime = owed > self.sounded;
+        if chime {
+            self.sounded = owed;
+        }
+        chime
+    }
+
+    /// How long until the next chime, for a frame to be scheduled then: the
+    /// countdown may be finishing behind another mode that is fast asleep.
+    pub fn next_in(&self, countdown: &Countdown, now: Instant) -> Option<Duration> {
+        match countdown.overtime(now) {
+            Some(over) => (self.sounded < CHIMES).then(|| (CHIME_EVERY * self.sounded).saturating_sub(over)),
+            None => countdown.is_running(now).then(|| countdown.remaining(now)),
+        }
+    }
+}
+
 /// `MM:SS.t` below one hour, `H:MM:SS` above.
 pub fn format_stopwatch(d: Duration) -> String {
     let total_ms = d.as_millis();
@@ -136,6 +184,63 @@ pub fn next_countdown_tick(remaining: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_countdown_chimes_three_times_ten_seconds_apart() {
+        let mut alarm = Alarm::default();
+        assert!(!alarm.due(None));
+        assert!(alarm.due(Some(Duration::ZERO)), "the moment it finishes");
+        assert!(!alarm.due(Some(Duration::from_millis(400))), "once per chime, however many frames");
+        assert!(!alarm.due(Some(Duration::from_millis(9_999))));
+        assert!(alarm.due(Some(Duration::from_secs(10))));
+        assert!(alarm.due(Some(Duration::from_secs(20))));
+        assert!(!alarm.due(Some(Duration::from_secs(30))), "then it stays quiet");
+        assert!(!alarm.due(Some(Duration::from_secs(3600))));
+    }
+
+    #[test]
+    fn a_late_frame_owes_one_chime_not_a_burst() {
+        let mut alarm = Alarm::default();
+        assert!(alarm.due(Some(Duration::from_secs(25))), "first frame long after the finish");
+        assert!(!alarm.due(Some(Duration::from_secs(26))));
+        assert!(!alarm.due(Some(Duration::from_secs(40))));
+    }
+
+    #[test]
+    fn a_finish_discovered_after_the_blink_window_is_not_announced() {
+        let mut alarm = Alarm::default();
+        assert!(!alarm.due(Some(Duration::from_secs(30))), "the window has closed");
+        let mut alarm = Alarm::default();
+        assert!(!alarm.due(Some(Duration::from_secs(300))), "sound switched on minutes later");
+        assert!(!alarm.due(Some(Duration::from_secs(301))));
+    }
+
+    #[test]
+    fn rearming_the_countdown_rearms_the_alarm() {
+        let mut alarm = Alarm::default();
+        assert!(alarm.due(Some(Duration::ZERO)));
+        assert!(!alarm.due(None), "reset or restarted");
+        assert!(alarm.due(Some(Duration::ZERO)), "the next finish is heard again");
+    }
+
+    #[test]
+    fn the_next_chime_is_scheduled_even_when_nothing_else_is() {
+        let t0 = Instant::now();
+        let mut cd = Countdown::new(Duration::from_secs(60));
+        let mut alarm = Alarm::default();
+        assert_eq!(alarm.next_in(&cd, t0), None, "idle: nothing to wait for");
+        cd.toggle(t0);
+        assert_eq!(alarm.next_in(&cd, t0 + Duration::from_secs(45)), Some(Duration::from_secs(15)));
+        cd.toggle(t0 + Duration::from_secs(50));
+        assert_eq!(alarm.next_in(&cd, t0 + Duration::from_secs(55)), None, "paused");
+        cd.toggle(t0 + Duration::from_secs(60));
+        let finish = t0 + Duration::from_secs(70);
+        assert!(alarm.due(cd.overtime(finish)));
+        assert_eq!(alarm.next_in(&cd, finish + Duration::from_secs(4)), Some(Duration::from_secs(6)));
+        assert!(alarm.due(cd.overtime(finish + Duration::from_secs(10))));
+        assert!(alarm.due(cd.overtime(finish + Duration::from_secs(20))));
+        assert_eq!(alarm.next_in(&cd, finish + Duration::from_secs(21)), None, "all three are out");
+    }
 
     fn ms(v: u64) -> Duration {
         Duration::from_millis(v)

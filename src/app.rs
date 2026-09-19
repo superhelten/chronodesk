@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::autostart::Autostart;
 use crate::board;
+use crate::chime;
 use crate::clock::{ClockStyle, clock_readout};
 use crate::ring;
 use crate::config::{self, Config};
@@ -22,7 +23,7 @@ use crate::night::{self, Schedule};
 use crate::placement;
 use crate::text::{display_family, install_display_font, label_family, measure_glyphs, paint_galley, paint_readout, spaced};
 use crate::theme::Theme;
-use crate::timer::{self, Countdown, Stopwatch};
+use crate::timer::{self, Alarm, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
 
 /// How long a finished timer blinks before settling on a steady colour.
@@ -159,6 +160,9 @@ pub struct ChronoApp {
     locked: bool,
     stopwatch: Stopwatch,
     countdown: Countdown,
+    alarm: Alarm,
+    /// Chimes actually played, for the instrumentation.
+    chimes: u32,
     tray: Tray,
     instrument: Instrument,
     /// The theme drawn with this frame: palette plus any night dimming.
@@ -232,6 +236,8 @@ impl ChronoApp {
             dirty_since: repaired.then(Instant::now),
             locked: false,
             stopwatch: Stopwatch::default(),
+            alarm: Alarm::default(),
+            chimes: 0,
             tray: Tray::new(&cc.egui_ctx),
             instrument: Instrument::start(&cc.egui_ctx),
             layout: DerivedLayout::new(&Theme::default()),
@@ -392,6 +398,7 @@ impl ChronoApp {
             Command::ToggleBoardLayout => s.board_layout = s.board_layout.toggled(),
             Command::ToggleBoardLabels => s.board_labels = s.board_labels.toggled(),
             Command::ToggleRing => s.seconds_ring = !s.seconds_ring,
+            Command::ToggleTimerSound => s.timer_sound = !s.timer_sound,
             Command::SetSize(size) => s.size = size,
             Command::ToggleFont => s.font = s.font.toggled(),
             Command::SetFont(font) => s.font = font,
@@ -491,6 +498,7 @@ impl ChronoApp {
             board_layout: s.board_layout,
             board_labels: s.board_labels,
             seconds_ring: s.seconds_ring,
+            timer_sound: s.timer_sound,
             always_on_top: s.always_on_top,
             autostart: self.autostart_on.0,
             autostart_available: self.exe.is_some(),
@@ -824,10 +832,18 @@ impl eframe::App for ChronoApp {
         // could straddle a boundary and leave a stale value up for a full period.
         // A scheduled night boundary is folded in the same way, so an idle
         // stopwatch still sleeps until the next thing that changes the picture.
-        let wake = match (readout.next_change, night_wake) {
-            (Some(display), Some(night)) => Some(display.min(night)),
-            (display, night) => display.or(night),
-        };
+        // The countdown is heard in whatever mode is showing, so its finish is a
+        // wake of its own: behind a paused stopwatch nothing else would draw then.
+        // The bookkeeping runs with the sound off too, so switching it on halfway
+        // through a finish does not replay what was skipped; switched on after the
+        // blink window, `due` owes nothing at all.
+        let chime = self.alarm.due(self.countdown.overtime(now)) && self.settings.timer_sound;
+        if chime {
+            chime::play();
+            self.chimes += 1;
+        }
+        let alarm_wake = self.settings.timer_sound.then(|| self.alarm.next_in(&self.countdown, now)).flatten();
+        let wake = [readout.next_change, night_wake, alarm_wake].into_iter().flatten().min();
         if let Some(next) = wake {
             ctx.request_repaint_after(next + WAKE_SLACK);
         }
@@ -845,7 +861,7 @@ impl eframe::App for ChronoApp {
         } else {
             Cause::Other
         };
-        self.instrument.record_frame(frame_start.elapsed(), cause, self.layout.rebuilds());
+        self.instrument.record_frame(frame_start.elapsed(), cause, self.layout.rebuilds(), self.chimes);
 
         // Last: this blocks in a native modal loop until the menu closes.
         if background.secondary_clicked() {

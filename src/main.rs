@@ -3,6 +3,7 @@
 mod app;
 mod autostart;
 mod board;
+mod chime;
 mod clock;
 mod config;
 mod digital;

@@ -45,6 +45,7 @@ pub enum Command {
     ToggleBoardLayout,
     ToggleBoardLabels,
     ToggleRing,
+    ToggleTimerSound,
     ToggleOnTop,
     /// Registers this exe to start at login, or removes the entry.
     ToggleAutostart,
@@ -65,6 +66,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "date" => Command::ToggleDate,
         "digital" => Command::ToggleFont,
         "ring" => Command::ToggleRing,
+        "timersound" => Command::ToggleTimerSound,
         "horizontal" => Command::ToggleBoardLayout,
         "codes" => Command::ToggleBoardLabels,
         "ontop" => Command::ToggleOnTop,
@@ -108,6 +110,7 @@ pub struct MenuState {
     pub board_layout: Layout,
     pub board_labels: Labels,
     pub seconds_ring: bool,
+    pub timer_sound: bool,
     pub always_on_top: bool,
     pub autostart: bool,
     pub autostart_available: bool,
@@ -123,6 +126,7 @@ pub struct Tray {
     horizontal: CheckMenuItem,
     codes: CheckMenuItem,
     ring: CheckMenuItem,
+    timer_sound: CheckMenuItem,
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
@@ -197,6 +201,7 @@ impl Tray {
         let faces: Vec<_> =
             Font::ALL.into_iter().map(|f| (f, check(&format!("font:{}", f.id()), f.label()))).collect();
         let ring = check("ring", "Seconds ring");
+        let timer_sound = check("timersound", "Sound when finished");
         let horizontal = check("horizontal", "One line");
         let codes = check("codes", "Exchange codes");
         let backdrop = check("backdrop", "Backdrop");
@@ -209,8 +214,9 @@ impl Tray {
         let autostart = check("autostart", "Start with Windows");
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
-        let preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
-        let m1 = PredefinedMenuItem::separator();
+        let mut preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let (m1, t1) = (PredefinedMenuItem::separator(), PredefinedMenuItem::separator());
+        preset_refs.extend([&t1 as &dyn IsMenuItem, &timer_sound]);
         let mut market_refs: Vec<&dyn IsMenuItem> = vec![&horizontal, &codes, &m1];
         market_refs.extend(markets.iter().map(|(_, i)| i as &dyn IsMenuItem));
         let size_refs: Vec<&dyn IsMenuItem> = sizes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
@@ -283,6 +289,7 @@ impl Tray {
             horizontal,
             codes,
             ring,
+            timer_sound,
             start_pause,
             reset,
             sizes,
@@ -335,6 +342,7 @@ impl Tray {
         self.horizontal.set_checked(state.board_layout == Layout::Horizontal);
         self.codes.set_checked(state.board_labels == Labels::Code);
         self.ring.set_checked(state.seconds_ring);
+        self.timer_sound.set_checked(state.timer_sound);
         // The board has no seconds to show.
         self.ring.set_enabled(state.mode != Mode::Market);
         let has_controls = state.mode.has_controls();
@@ -456,6 +464,7 @@ mod tests {
         assert_eq!(parse_command("horizontal"), Some(Command::ToggleBoardLayout));
         assert_eq!(parse_command("codes"), Some(Command::ToggleBoardLabels));
         assert_eq!(parse_command("ring"), Some(Command::ToggleRing));
+        assert_eq!(parse_command("timersound"), Some(Command::ToggleTimerSound));
     }
 
     #[test]

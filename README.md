@@ -21,6 +21,7 @@ Requires Rust 1.95+ (eframe 0.36).
 | Start / pause, reset | Hover the overlay in Stopwatch/Timer mode, or `Space` / `R` when focused |
 | Switch mode | Menu, or `1` Clock · `2` Stopwatch · `3` Timer · `4` Markets |
 | Timer duration | Menu → *Timer duration*, or scroll over an idle timer (±1 min per notch) |
+| Timer sound | A finished timer blinks for half a minute and chimes three times, ten seconds apart, in whatever mode is showing. Menu → *Timer duration* → *Sound when finished* switches the chime off |
 | Market board | Mode *Markets*: one row per exchange with its local time and a status dot (filled green = trading, amber = midday break, hollow = closed), and the next open or close across the board on the caption line. Menu → *Exchanges* picks the rows, *One line* lays them out as a strip, *Exchange codes* swaps city names for NYSE, LSE, OSE… |
 | Streaming | Menu → *Appearance* → *Chroma key background (#00FF00)* |
 | Text over bright windows | Menu → *Appearance* → *Text outline* (on by default; a dark halo keeps white text legible without a backdrop). Off under a backdrop or a chroma key, where a dark rim would only leave a fringe once the green is keyed out |
@@ -87,6 +88,16 @@ Manager (which leaves the value and writes a veto under `Explorer\StartupApprove
 moving the exe. The menu re-reads it at most every ten seconds, on frames that are drawn anyway.
 Neither feature exists on macOS yet.
 
+### Timer sound
+
+The chime is Windows' own notification sound (the scheme's *Asterisk*), asked for with one system
+call: no audio file, no audio stack, and it follows the volume, mute and sound scheme already set —
+with the scheme on *No sounds* the timer is silent. It plays when the countdown reaches zero and
+again ten and twenty seconds later, inside the half minute the digits blink, then never again; *Reset*
+or *Restart* stops it at once. A countdown left running behind another mode is still heard: its finish
+is scheduled as a wake of its own, so even behind a paused stopwatch — which draws nothing — the whole
+alarm costs about seven frames. With the sound off no wake is scheduled at all. macOS is silent for now.
+
 ## Configuration
 
 Settings (mode, timer length, size, font, backdrop, chroma, seconds, clock format, date line, colours,
@@ -111,7 +122,7 @@ automatically.
 tolerant per element: a misspelt id drops that row with a warning, a duplicate is collapsed, and an
 empty list falls back to the default board. The *Exchanges* menu adds a row at its catalogue position
 among whatever order the file holds, and never removes the last one. `board_layout` is `"vertical"`
-or `"horizontal"`, `board_labels` is `"city"` or `"code"`, and `seconds_ring` is a boolean.
+or `"horizontal"`, `board_labels` is `"city"` or `"code"`, and `seconds_ring` and `timer_sound` are booleans.
 
 ### Window placement
 
@@ -151,7 +162,8 @@ With the feature *and* the flag, the app listens on a loopback port and takes li
 hovering and clicking take the same path as a real mouse.
 
 `stats` reports frames, fps, mean/max time of the app's `ui()` pass, the gap between frames and a
-breakdown of why each frame was drawn (`tick`, `input`, `config`, `other`).
+breakdown of why each frame was drawn (`tick`, `input`, `config`, `other`), plus two absolute counters
+that survive a reset: layout `rebuilds=` and timer `chimes=`.
 
 `place` re-runs the placement check with a synthetic saved position, as if it had just been read
 from the config file, and `placement` reports what was decided and against which monitors — so a
@@ -169,7 +181,13 @@ itself rather than against the app's own numbers.
 pwsh -File scripts/lifecycle-test.ps1
 ```
 
-checks the single-instance guard (same file spelled differently: steps aside; another file: runs
+```sh
+pwsh -File scripts/chime-test.ps1
+```
+
+runs a one-minute countdown behind a paused stopwatch and reads `chimes=` from `stats`: three chimes,
+about seven frames, asleep before and after, and a silent finish with the sound off. It takes three
+minutes and plays the sound for real. The lifecycle script checks the single-instance guard (same file spelled differently: steps aside; another file: runs
 alongside) and the startup entry, reading the registry from PowerShell rather than through the app.
 In an `instrument` build `CHRONODESK_RUN_KEY` redirects the `Run` key to a scratch key, so the real
 one is never written; a release build ignores the variable.
@@ -192,14 +210,15 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/autostart.rs` – *Start with Windows*: the per-user `Run` key as the only record (unit-tested against a scratch key)
 - `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`
-- `src/timer.rs` – pure stopwatch/countdown logic and formatting (unit-tested)
+- `src/timer.rs` – pure stopwatch/countdown logic, the chime schedule and formatting (unit-tested)
+- `src/chime.rs` – the system notification sound, one call
 - `src/icon.rs` – procedurally drawn clock icon (no asset files)
 
 ## Performance notes
 
 - Repaints only when the display changes: 1 frame/s for the clock (landing just after each second),
   10 frames/s for a running stopwatch, none while paused, and one a minute for the market board with
-  seconds hidden. The seconds ring brings the clock back to 1 frame/s. Idle CPU is below Windows'
+  seconds hidden. A timer finishing behind a sleeping mode adds about seven frames in total for its three chimes. The seconds ring brings the clock back to 1 frame/s. Idle CPU is below Windows'
   accounting resolution.
 - Memory: ~40 MB private working set / ~65 MB private bytes, almost all of it the graphics driver.
   glow was chosen after measuring: wgpu used 130–310 MB private working set.

@@ -76,6 +76,8 @@ pub struct Config {
     pub board_labels: Labels,
     /// Studio look: sixty LEDs around the readout, lit as the seconds pass.
     pub seconds_ring: bool,
+    /// Chime when the countdown reaches zero (the system's notification sound).
+    pub timer_sound: bool,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -104,6 +106,7 @@ impl Default for Config {
             board_layout: Layout::Vertical,
             board_labels: Labels::City,
             seconds_ring: false,
+            timer_sound: true,
             window: None,
         }
     }
@@ -253,6 +256,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "board_layout", &mut config.board_layout, &mut warnings);
     field(&mut fields, "board_labels", &mut config.board_labels, &mut warnings);
     field(&mut fields, "seconds_ring", &mut config.seconds_ring, &mut warnings);
+    field(&mut fields, "timer_sound", &mut config.timer_sound, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -804,6 +808,27 @@ mod tests {
         assert_eq!(loaded.config.board_layout, Layout::Vertical, "a bad value falls back");
         assert!(loaded.config.seconds_ring, "other fields survive");
         assert!(loaded.warnings[0].contains("board_layout"), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn timer_sound_defaults_on_and_round_trips() {
+        let dir = Dir::new("timer_sound");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        let loaded = load(&path);
+        assert!(loaded.config.timer_sound, "a file from before the field keeps the chime");
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let config = Config { timer_sound: false, ..Default::default() };
+        save(&path, &config).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("timer_sound: false"));
+        assert_eq!(load(&path).config, config);
+
+        write(&path, "(schema_version:1,timer_sound:\"loud\",timer_minutes:5)");
+        let loaded = load(&path);
+        assert!(loaded.config.timer_sound, "a bad value falls back");
+        assert_eq!(loaded.config.timer_minutes, 5, "other fields survive");
+        assert!(loaded.warnings[0].contains("timer_sound"), "{:?}", loaded.warnings);
     }
 
     #[test]
