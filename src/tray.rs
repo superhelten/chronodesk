@@ -49,6 +49,8 @@ pub enum Command {
     ToggleOnTop,
     /// Registers this exe to start at login, or removes the entry.
     ToggleAutostart,
+    /// Shows the welcome card again.
+    ShowWelcome,
     Quit,
 }
 
@@ -71,6 +73,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "codes" => Command::ToggleBoardLabels,
         "ontop" => Command::ToggleOnTop,
         "autostart" => Command::ToggleAutostart,
+        "welcome" => Command::ShowWelcome,
         "quit" => Command::Quit,
         _ => {
             let (kind, value) = id.split_once(':')?;
@@ -148,8 +151,12 @@ pub struct Tray {
 
 impl Tray {
     /// Must be called on the event-loop thread once the loop is running
-    /// (i.e. from the eframe app creator).
-    pub fn new(ctx: &egui::Context) -> Self {
+    /// (i.e. from the eframe app creator). Without `show_icon` there is a menu
+    /// but nothing in the notification area: a scripted test instance would
+    /// otherwise put a second, identical icon next to the user's own, and a
+    /// click on the wrong one locks the test, or opens a menu that blocks its
+    /// event loop for as long as it stays open.
+    pub fn new(ctx: &egui::Context, show_icon: bool) -> Self {
         let (tx, rx) = mpsc::channel();
 
         // Setting a handler diverts events away from the crate's own receivers, so
@@ -212,6 +219,7 @@ impl Tray {
         let date = check("date", "Show date");
         let on_top = check("ontop", "Always on top");
         let autostart = check("autostart", "Start with Windows");
+        let tips = MenuItem::with_id("welcome", "Quick tips", true, None);
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
         let mut preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
@@ -265,19 +273,24 @@ impl Tray {
             &on_top,
             &autostart,
             &s4,
+            &tips,
             &quit,
         ]);
         menu.append_items(&items).expect("build menu");
 
-        let icon = TrayIconBuilder::new()
-            .with_id("chronodesk")
-            .with_menu(Box::new(menu.clone()))
-            .with_menu_on_left_click(false)
-            .with_tooltip("ChronoDesk")
-            .with_icon(tray_icon(false))
-            .build()
-            .inspect_err(|err| eprintln!("ChronoDesk: tray icon unavailable: {err}"))
-            .ok();
+        let icon = show_icon
+            .then(|| {
+                TrayIconBuilder::new()
+                    .with_id("chronodesk")
+                    .with_menu(Box::new(menu.clone()))
+                    .with_menu_on_left_click(false)
+                    .with_tooltip("ChronoDesk")
+                    .with_icon(tray_icon(false))
+                    .build()
+                    .inspect_err(|err| eprintln!("ChronoDesk: tray icon unavailable: {err}"))
+                    .ok()
+            })
+            .flatten();
 
         Self {
             icon,
@@ -426,6 +439,7 @@ mod tests {
         assert_eq!(parse_command("lock"), Some(Command::ToggleLock));
         assert_eq!(parse_command("quit"), Some(Command::Quit));
         assert_eq!(parse_command("autostart"), Some(Command::ToggleAutostart));
+        assert_eq!(parse_command("welcome"), Some(Command::ShowWelcome));
         assert_eq!(parse_command("timer:25"), Some(Command::SetTimerMinutes(25)));
         for mode in Mode::ALL {
             assert_eq!(parse_command(&format!("mode:{}", mode.id())), Some(Command::SetMode(mode)));

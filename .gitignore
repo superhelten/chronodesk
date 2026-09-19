@@ -9,3 +9,6 @@ app.ron
 # A config backup from before that script ran under its own CHRONODESK_CONFIG;
 # it no longer writes one, but a copy may still be lying around.
 /scripts/user_app_instr.ron
+
+# What scripts/package.ps1 builds
+/dist

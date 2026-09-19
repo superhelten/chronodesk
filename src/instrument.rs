@@ -87,6 +87,12 @@ impl Telemetry {
     }
 }
 
+/// True when this launch is driven by a test script: the feature is compiled
+/// in *and* the flag was given.
+pub fn requested(args: &[String]) -> bool {
+    cfg!(feature = "instrument") && args.iter().any(|arg| arg == "--instrument")
+}
+
 #[cfg(feature = "instrument")]
 mod imp {
     use std::io::{BufRead as _, BufReader, Write as _};
@@ -169,6 +175,11 @@ mod imp {
             });
 
             Self { shared: Some(shared) }
+        }
+
+        /// Whether a script is driving this instance.
+        pub fn active(&self) -> bool {
+            self.shared.is_some()
         }
 
         /// Commands sent over the channel, to be applied like any other.
@@ -381,6 +392,10 @@ mod imp {
                 eprintln!("ChronoDesk: built without the 'instrument' feature; flag ignored");
             }
             Self
+        }
+
+        pub fn active(&self) -> bool {
+            false
         }
 
         pub fn commands(&self) -> Vec<Command> {

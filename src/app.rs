@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local, Timelike as _};
@@ -21,10 +23,12 @@ use crate::market::{self, BoardStyle, Market};
 use crate::matrix;
 use crate::night::{self, Schedule};
 use crate::placement;
+use crate::signal::{self, Signal};
 use crate::text::{display_family, install_display_font, label_family, measure_glyphs, paint_galley, paint_readout, spaced};
 use crate::theme::Theme;
 use crate::timer::{self, Alarm, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
+use crate::welcome;
 
 /// How long a finished timer blinks before settling on a steady colour.
 const BLINK_FOR: Duration = Duration::from_secs(30);
@@ -40,6 +44,8 @@ const PLACEMENT_TIMEOUT: Duration = Duration::from_millis(1500);
 const ARRIVAL_TOLERANCE_PX: f32 = 2.0;
 /// Frames the placement check may wait for the display scale to settle.
 const PLACEMENT_DEFERRALS: u8 = 10;
+/// How long the overlay stays outlined after another launch asked for it.
+const ATTENTION_FOR: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -191,6 +197,12 @@ pub struct ChronoApp {
     exe: Option<PathBuf>,
     /// The registry's answer and when it was read.
     autostart_on: (bool, Instant),
+    /// The welcome card is up instead of the readout.
+    welcome: bool,
+    /// Word from later launches: show yourself, or quit for the installer.
+    signals: Receiver<Signal>,
+    /// Since when the overlay is outlined because another launch asked for it.
+    attention: Option<Instant>,
 }
 
 /// How long to wait after the last change before writing the config file.
@@ -233,21 +245,41 @@ impl ChronoApp {
             cc.egui_ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
         }
 
+        let config_path = config::config_path();
+        let (tx, signals) = mpsc::channel();
+        if let Some(path) = &config_path {
+            let ctx = cc.egui_ctx.clone();
+            let window = native_window(cc);
+            signal::listen(path, move |signal| {
+                // A minimised window draws no frames, so nothing sent to the
+                // app would be looked at: it is brought back from here first.
+                if signal == Signal::Show {
+                    restore_if_minimised(window);
+                }
+                let _ = tx.send(signal);
+                ctx.request_repaint();
+            });
+        }
+        let instrument = Instrument::start(&cc.egui_ctx);
+
         Ok(Self {
+            welcome: settings.first_run,
+            signals,
+            attention: None,
             countdown,
             saved: settings.clone(),
             saved_position: settings.window,
             placement_pending: Some(PLACEMENT_DEFERRALS),
             pending_move: None,
             settings,
-            config_path: config::config_path(),
+            config_path,
             dirty_since: repaired.then(Instant::now),
             locked: false,
             stopwatch,
             alarm: Alarm::default(),
             chimes: 0,
-            tray: Tray::new(&cc.egui_ctx),
-            instrument: Instrument::start(&cc.egui_ctx),
+            tray: Tray::new(&cc.egui_ctx, !instrument.active()),
+            instrument,
             layout: DerivedLayout::new(&Theme::default()),
             theme: Theme::default(),
             window_size: None,
@@ -393,7 +425,34 @@ impl ChronoApp {
         }
     }
 
+    /// The card has done its job the moment the user does anything at all, and
+    /// that is written down at once so it is never shown twice.
+    fn dismiss_welcome(&mut self) {
+        if self.welcome {
+            self.welcome = false;
+            if self.settings.first_run {
+                self.settings.first_run = false;
+                self.write_config();
+            }
+        }
+    }
+
+    /// Another launch found this one running. An overlay has no taskbar button
+    /// to flash, so it takes the focus, wears an outline for a few seconds, and
+    /// has its position checked again, which brings it back if the screen it
+    /// was on has gone.
+    fn surface(&mut self, ctx: &egui::Context, now: Instant) {
+        ctx.send_viewport_cmd(ViewportCommand::Focus);
+        self.attention = Some(now);
+        self.saved_position = self.settings.window;
+        self.placement_pending = Some(PLACEMENT_DEFERRALS);
+    }
+
     fn apply(&mut self, cmd: Command, ctx: &egui::Context, now: Instant) {
+        // Whoever reaches for the menu or a key has found their way in.
+        if cmd != Command::ShowWelcome {
+            self.dismiss_welcome();
+        }
         let counters_touched = matches!(cmd, Command::StartPause | Command::Reset | Command::SetTimerMinutes(_));
         let s = &mut self.settings;
         match cmd {
@@ -439,6 +498,7 @@ impl ChronoApp {
                 ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
             }
             Command::ToggleAutostart => self.toggle_autostart(now),
+            Command::ShowWelcome => self.welcome = true,
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
         }
         if counters_touched {
@@ -568,6 +628,11 @@ impl ChronoApp {
     /// The clock is drawn in the primary colour, the counters in the
     /// secondary one; they only differ in a dual-colour preset.
     fn readout(&self, now: Instant, local: DateTime<Local>) -> Readout {
+        if self.welcome {
+            // Nothing on the card changes, so nothing is scheduled: it costs
+            // no frames while it waits to be read.
+            return Readout { scene: Scene::Card, caption: welcome::DISMISS.to_owned(), next_change: None, ring: None };
+        }
         let s = &self.settings;
         let c = &self.theme.color;
         let ring = s.seconds_ring;
@@ -656,6 +721,8 @@ enum Scene {
     Line { main: String, color: Color32 },
     /// The market board, one row per exchange.
     Board(Vec<market::Row>),
+    /// The welcome card.
+    Card,
 }
 
 struct Readout {
@@ -709,15 +776,28 @@ impl eframe::App for ChronoApp {
         for cmd in commands {
             self.apply(cmd, &ctx, now);
         }
+        for signal in self.signals.try_iter().collect::<Vec<_>>() {
+            match signal {
+                Signal::Show => self.surface(&ctx, now),
+                Signal::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
+            }
+        }
 
         let rect = ui.max_rect();
         let background = ui.allocate_rect(rect, Sense::click_and_drag());
+        // Any key will do, not only the ones that mean something.
+        let key_pressed = !self.locked && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
+        if background.clicked() || key_pressed {
+            self.dismiss_welcome();
+        }
         let hovered = !self.locked && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
         if hovered && let Some(cmd) = self.scroll_timer(&ctx) {
             self.apply(cmd, &ctx, now);
         }
 
-        let s = self.settings.clone();
+        let mut s = self.settings.clone();
+        // The card is text to be read, whatever is behind the overlay.
+        s.backdrop |= self.welcome;
         // One reading of the wall clock per frame, shared by the readout and
         // the night schedule so they can never disagree about the time.
         let local = Local::now();
@@ -766,7 +846,10 @@ impl eframe::App for ChronoApp {
                 let geo = board::measure(&mut self.layout, rows, s.board_layout, s.board_labels, &faces);
                 (vec2(geo.size.x.max(geo.caption_min_width), geo.size.y), Some(geo))
             }
+            Scene::Card => (Vec2::ZERO, None),
         };
+        let card = matches!(readout.scene, Scene::Card).then(|| Card::lay_out(&painter, &theme));
+        let scene_size = card.as_ref().map_or(scene_size, |card| card.size);
         let theme = &theme;
 
         // The seconds ring runs just inside the window edge, so the content
@@ -789,9 +872,21 @@ impl eframe::App for ChronoApp {
         if s.backdrop {
             painter.rect_filled(rect, m.corner, theme.color.backdrop);
         }
+        if self.welcome {
+            // The usual backdrop lets the desktop through, which suits four
+            // digits and not eight lines of prose.
+            painter.rect_filled(rect, m.corner, Color32::from_black_alpha(190));
+        }
         if hovered && !s.backdrop {
             let stroke = Stroke::new(1.0, theme.color.hover_frame);
             painter.rect_stroke(rect.shrink(0.5), m.corner, stroke, StrokeKind::Inside);
+        }
+        // "Here I am", for a few seconds after another launch asked.
+        let attention_wake = self.attention.and_then(|since| ATTENTION_FOR.checked_sub(now.duration_since(since)));
+        if attention_wake.is_some() {
+            painter.rect_stroke(rect.shrink(1.0), m.corner, Stroke::new(2.0, theme.color.text), StrokeKind::Inside);
+        } else {
+            self.attention = None;
         }
 
         // Dimming over a halo would eat the contrast the halo just bought, so
@@ -825,13 +920,18 @@ impl eframe::App for ChronoApp {
                 board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, style, &faces);
                 if dim_captions { theme.dim_caption(theme.color.text) } else { theme.color.text }
             }
+            Scene::Card => {
+                let card = card.expect("laid out with the card");
+                card.paint(&painter, pos2(inner.center().x - card.size.x / 2.0, scene_top));
+                theme.color.text
+            }
         };
 
         let caption_rect = Rect::from_min_size(
             pos2(inner.left(), scene_top + scene_size.y),
             vec2(inner.width(), caption_height),
         );
-        let show_controls = hovered && s.mode.has_controls();
+        let show_controls = hovered && s.mode.has_controls() && !self.welcome;
         let buttons = show_controls.then(|| control_rects(caption_rect, &m));
         let mut pending = None;
         if show_controls {
@@ -870,7 +970,7 @@ impl eframe::App for ChronoApp {
             self.chimes += 1;
         }
         let alarm_wake = self.settings.timer_sound.then(|| self.alarm.next_in(&self.countdown, now)).flatten();
-        let wake = [readout.next_change, night_wake, alarm_wake].into_iter().flatten().min();
+        let wake = [readout.next_change, night_wake, alarm_wake, attention_wake].into_iter().flatten().min();
         if let Some(next) = wake {
             ctx.request_repaint_after(next + WAKE_SLACK);
         }
@@ -900,8 +1000,10 @@ impl eframe::App for ChronoApp {
                 },
             );
             format!(
-                "mode={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
+                "mode={} welcome={} attention={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
                 self.settings.mode.id(),
+                u8::from(self.welcome),
+                u8::from(self.attention.is_some()),
                 rect.width(),
                 rect.height(),
                 u8::from(self.stopwatch.is_running()),
@@ -983,6 +1085,52 @@ fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, l
     }
 }
 
+/// The welcome card, laid out: a title, then one row per tip with the key or
+/// place in bold and what it does beside it. A fixed, readable type size
+/// whatever size the clock is set to, since this is prose, not a readout.
+struct Card {
+    title: Arc<egui::Galley>,
+    rows: Vec<(Arc<egui::Galley>, Arc<egui::Galley>)>,
+    key_width: f32,
+    size: Vec2,
+}
+
+impl Card {
+    const TYPE: f32 = 13.0;
+    const ROW: f32 = 21.0;
+    const TITLE_ROW: f32 = 30.0;
+    const GUTTER: f32 = 14.0;
+
+    fn lay_out(painter: &egui::Painter, theme: &Theme) -> Self {
+        let c = &theme.color;
+        let title = painter.layout_no_wrap(spaced(welcome::TITLE), FontId::new(Self::TYPE - 1.0, display_family()), c.secondary);
+        let rows: Vec<_> = welcome::ROWS
+            .iter()
+            .map(|(key, what)| {
+                (
+                    painter.layout_no_wrap((*key).to_owned(), FontId::new(Self::TYPE, label_family()), c.label),
+                    painter.layout_no_wrap((*what).to_owned(), FontId::new(Self::TYPE, display_family()), c.text.gamma_multiply(0.85)),
+                )
+            })
+            .collect();
+        let key_width = rows.iter().map(|(key, _)| key.size().x).fold(0.0, f32::max);
+        let text_width = rows.iter().map(|(_, what)| what.size().x).fold(0.0, f32::max);
+        let width = (key_width + Self::GUTTER + text_width).max(title.size().x);
+        let size = vec2(width, Self::TITLE_ROW + Self::ROW * rows.len() as f32);
+        Self { title, rows, key_width, size }
+    }
+
+    fn paint(&self, painter: &egui::Painter, origin: Pos2) {
+        painter.galley(origin, Arc::clone(&self.title), Color32::PLACEHOLDER);
+        for (i, (key, what)) in self.rows.iter().enumerate() {
+            let y = origin.y + Self::TITLE_ROW + Self::ROW * i as f32;
+            // Keys right-aligned against the gutter, so the explanations line up.
+            painter.galley(pos2(origin.x + self.key_width - key.size().x, y), Arc::clone(key), Color32::PLACEHOLDER);
+            painter.galley(pos2(origin.x + self.key_width + Self::GUTTER, y), Arc::clone(what), Color32::PLACEHOLDER);
+        }
+    }
+}
+
 /// Where the two hover buttons sit within the caption line.
 fn control_rects(area: Rect, metrics: &Metrics) -> [(Rect, Command); 2] {
     let (size, gap) = (metrics.control, metrics.control_gap);
@@ -1043,6 +1191,36 @@ fn controls(
         }
     }
     clicked
+}
+
+/// The window's handle as a plain number, so another thread may hold it.
+fn native_window(cc: &eframe::CreationContext<'_>) -> isize {
+    use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+    match cc.window_handle().map(|handle| handle.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
+        _ => 0,
+    }
+}
+
+/// Safe from any thread: `ShowWindow` posts to the window's own thread.
+fn restore_if_minimised(window: isize) {
+    #[cfg(windows)]
+    if window != 0 {
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn IsIconic(window: isize) -> i32;
+            fn ShowWindow(window: isize, command: i32) -> i32;
+        }
+        const SW_RESTORE: i32 = 9;
+        // SAFETY: both take a window handle by value and tolerate a stale one.
+        unsafe {
+            if IsIconic(window) != 0 {
+                ShowWindow(window, SW_RESTORE);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
 }
 
 /// Windows 11 draws a 1px border and rounds corners even on undecorated

@@ -2,6 +2,33 @@
 
 Minimalist transparent desktop overlay: clock, stopwatch and timer. Rust + `eframe`/`egui` (glow renderer) + `tray-icon`.
 
+## Install
+
+Download `ChronoDesk-Setup.exe` and run it. There is no wizard: it copies itself to
+`%LOCALAPPDATA%\ChronoDesk\chronodesk.exe`, adds a Start menu shortcut and an entry under *Installed
+apps*, and starts the overlay, which greets a first-time user with a card of tips. Nothing asks for
+administrator rights, because everything it touches belongs to the user.
+
+- **Run it again** at any time. With the same version installed it copies nothing and the running
+  overlay outlines itself for a few seconds ("here I am"). With a newer one it asks the running overlay
+  to quit, swaps the exe and starts the new one; settings and a running timer carry over.
+- **Start with Windows** is not switched on for you; it is one click in the menu, and from the installed
+  copy it names the fixed path. If an entry already exists (from a build folder, a copy in Downloads),
+  the setup repoints it at the installed exe. An entry switched off in Task Manager stays off.
+- **Uninstall** from *Settings → Apps → Installed apps*, or `chronodesk.exe --uninstall`. The exe, the
+  shortcut, the registry entry and the folder go; your settings in `%APPDATA%\chronodesk` stay.
+
+The setup is the app itself under another name: an exe whose file name contains `setup`, or any copy
+run with `--install`, installs instead of showing a clock (`--quiet` suppresses the message boxes).
+So there is no second program to build, and no installer that can drift out of step with the app:
+
+```sh
+pwsh -File scripts/package.ps1      # dist\ChronoDesk-Setup.exe + its SHA-256
+```
+
+The exe is not code-signed, so SmartScreen will say "unrecognised app" on a machine that has not
+seen it before (*More info → Run anyway*).
+
 ## Build & run
 
 ```sh
@@ -15,6 +42,7 @@ Requires Rust 1.95+ (eframe 0.36).
 
 | Action | How |
 | --- | --- |
+| First launch | A welcome card instead of the clock: where the menu is, the keys, and the looks worth knowing. Any click, key or menu choice dismisses it for good; menu → *Quick tips* shows it again |
 | Move | Drag the overlay with the left mouse button |
 | Menu | Right-click the overlay, or right-click the tray icon (same menu) |
 | Lock / unlock click-through | **Left-click the tray icon** (or menu → *Locked*). The icon turns amber while locked |
@@ -75,8 +103,14 @@ clock. A green preset over the chroma key is the user's choice, and is keyed out
 
 ### One overlay per config file
 
-Launching ChronoDesk a second time does nothing: the second copy sees the first and exits before it
-reads anything. Two copies sharing one `app.ron` would each save their own settings and window
+Launching ChronoDesk a second time starts nothing new: the second copy sees the first, asks it to
+show itself, and exits before it reads anything. The first takes the focus, wears an outline for
+three seconds and has its position checked again, which brings it home if the screen it was on has
+gone. A minimised overlay is restored first, from the listening thread, because a minimised window
+draws no frames and so looks at nothing it is sent; with no taskbar button this is the way back. (It
+should rarely get there: the window has no minimise style bit, so the system menu's *Minimise* and
+Win+↓ do not apply to it.) The word is passed through a named event next to the guard's mutex: no socket, no polling, and
+no frames while nothing is said. The installer asks a running overlay to quit the same way. Two copies sharing one `app.ron` would each save their own settings and window
 position, with whichever quit last winning, behind two identical tray icons. The guard is a named
 mutex keyed on the config file's path, not on the app, so an instance pointed elsewhere with
 `CHRONODESK_CONFIG` runs alongside — which is what lets the test scripts run while your own overlay
@@ -125,6 +159,10 @@ empty list falls back to the default board. The *Exchanges* menu adds a row at i
 among whatever order the file holds, and never removes the last one. `board_layout` is `"vertical"`
 or `"horizontal"`, `board_labels` is `"city"` or `"code"`, and `seconds_ring` and `timer_sound` are booleans.
 
+`first_run` is `true` until the welcome card has been dismissed once, and only a launch that finds
+no config file at all starts out with it set: a file from before the field existed belongs to
+someone who knows the app. Set it to `true` by hand to see the card at the next launch.
+
 `stopwatch` and `countdown` are the app's own notes, not settings: `None` when idle, otherwise
 `Some((accumulated_ms: …, started_at_ms: …))` — what had been counted when it was last started, and
 when that was, in milliseconds since the Unix epoch (`None` while paused). An `Instant` means nothing
@@ -171,11 +209,16 @@ With the feature *and* the flag, the app listens on a loopback port and takes li
 `place <x> <y>` / `placement`, `stats` / `stats reset`, `state`, `passthrough on` / `off`, `quit`. Synthetic pointer events are injected into egui's raw input, so
 hovering and clicking take the same path as a real mouse.
 
-`state` reports what the last frame showed: mode, the window's size in points, both counters
+`state` reports what the last frame showed: mode, whether the welcome card is up (`welcome`) or the
+overlay is outlined after another launch asked for it (`attention`), the window's size in points, both counters
 (`sw_running`, `sw_ms`, `cd_running`, `cd_finished`, `cd_remaining_ms`) and, while the hover buttons
 are drawn, their centres (`start_x`, `start_y`, `reset_x`, `reset_y`). The test script clicks the
 button where the app says it drew it and then asks whether the stopwatch is running, instead of
 deriving a pixel offset from the window rectangle and inferring the click from a frame rate.
+A scripted instance (the feature *and* the flag) also starts without taking the focus and without a
+tray icon: the keyboard belongs to whoever is using the machine, and Space, R and 1–4 mean something
+here, while a second, identical tray icon invites a click that locks the test or opens a menu that
+blocks its event loop.
 `passthrough on` makes the window click-through for the run, so a real pointer resting on or
 crossing the overlay can neither steal the synthetic hover nor add frames to a measurement;
 injected events never pass through the OS and are unaffected. The script runs under its own
@@ -200,6 +243,22 @@ itself rather than against the app's own numbers.
 ```sh
 pwsh -File scripts/lifecycle-test.ps1
 ```
+
+```sh
+pwsh -File scripts/install-test.ps1
+pwsh -File scripts/welcome-test.ps1
+```
+
+The first installs for real, but into a scratch folder and a scratch registry key
+(`CHRONODESK_INSTALL_ROOT` and `CHRONODESK_RUN_KEY`, honoured by `instrument` builds only): a copy
+named `ChronoDesk-Setup.exe` installs and starts the app, a second run and a second launch leave the
+same process running and outlined, an existing `Run` entry is repointed, a different build makes the
+old overlay quit and takes its place, and `--uninstall` removes everything but the settings. The
+shortcut's target and the registry are read from PowerShell, not through the app, and the script ends
+by checking that the real folder, Start menu and registry were never touched. The second covers the
+welcome card: up on a launch without a config file and costing no frames while it waits, dismissed by
+a click and written to disk at once, gone at the next launch, back on *Quick tips*, and never shown to
+someone whose config file predates the field.
 
 ```sh
 pwsh -File scripts/resume-test.ps1
@@ -236,6 +295,10 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 - `src/matrix.rs` – the 5×7 dot-matrix face, round LEDs as polygons (unit-tested)
 - `src/config.rs` – the config file: atomic saves, field-tolerant loading
 - `src/instance.rs` – one overlay per config file: a named mutex keyed on the config path (unit-tested)
+- `src/signal.rs` – a later launch's word to the running overlay (show yourself, quit): two named events (unit-tested)
+- `src/install.rs` – the app as its own installer: fixed path, shortcut, *Installed apps* entry, upgrade and uninstall (unit-tested against a scratch folder and key)
+- `src/registry.rs` – the few `HKEY_CURRENT_USER` calls the two above and *Start with Windows* share
+- `src/welcome.rs` – the first-run card's text, checked against the names the menus use
 - `src/autostart.rs` – *Start with Windows*: the per-user `Run` key as the only record (unit-tested against a scratch key)
 - `src/placement.rs` – validating the saved position against the attached monitors and their work areas
 - `src/tray.rs` – tray icon and the shared native menu; events reach egui via a channel + `request_repaint`

@@ -12,6 +12,8 @@
 use std::io;
 use std::path::Path;
 
+use crate::registry;
+
 const VALUE: &str = "ChronoDesk";
 const SYSTEM_ROOT: &str = r"Software\Microsoft\Windows\CurrentVersion";
 
@@ -20,14 +22,29 @@ pub struct Autostart {
     approved_key: String,
 }
 
+/// Test runs point this at a scratch key, so a script can flip the menu item,
+/// or run the installer, without touching what Windows reads at login.
+/// Instrument builds only: a release build ignores the variable.
+fn scratch_root() -> Option<String> {
+    #[cfg(feature = "instrument")]
+    return std::env::var("CHRONODESK_RUN_KEY").ok().filter(|root| !root.is_empty());
+    #[cfg(not(feature = "instrument"))]
+    None
+}
+
+/// The key the app's other registrations (the uninstall entry) live under.
+pub fn registry_root() -> String {
+    scratch_root().unwrap_or_else(|| SYSTEM_ROOT.to_owned())
+}
+
 impl Autostart {
     /// The keys Windows itself reads at login.
     pub fn system() -> Self {
-        // Test runs point this at a scratch key, so a script can flip the
-        // menu item without registering a build directory to start at login.
-        #[cfg(feature = "instrument")]
-        if let Some(root) = std::env::var("CHRONODESK_RUN_KEY").ok().filter(|root| !root.is_empty()) {
-            return Self::under(&root);
+        if let Some(root) = scratch_root() {
+            return Self {
+                run_key: format!(r"{root}\Run"),
+                approved_key: format!(r"{root}\StartupApproved\Run"),
+            };
         }
         Self {
             run_key: format!(r"{SYSTEM_ROOT}\Run"),
@@ -35,8 +52,8 @@ impl Autostart {
         }
     }
 
-    #[cfg(any(test, feature = "instrument"))]
-    fn under(root: &str) -> Self {
+    #[cfg(test)]
+    pub(crate) fn under(root: &str) -> Self {
         Self { run_key: format!(r"{root}\Run"), approved_key: format!(r"{root}\StartupApproved\Run") }
     }
 
@@ -60,6 +77,29 @@ impl Autostart {
         // Either way a leftover "disabled" flag has no business staying: it
         // would silently veto the entry just written, or outlive the one removed.
         registry::delete_value(&self.approved_key, VALUE)
+    }
+
+    /// For the installer: an entry that exists, wherever it points, is made to
+    /// name `exe`. Nothing else is touched. No entry stays no entry, and a
+    /// Task Manager veto stays a veto, since neither is the installer's call.
+    /// True when the entry was rewritten.
+    pub fn repoint(&self, exe: &Path) -> io::Result<bool> {
+        match registry::read_string(&self.run_key, VALUE) {
+            Some(command) if !points_at(&command, exe) => {
+                registry::write_string(&self.run_key, VALUE, &command_line(exe))?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// For the uninstaller: removes the entry if it starts `exe`, and leaves
+    /// one that belongs to some other copy alone.
+    pub fn remove_if_ours(&self, exe: &Path) -> io::Result<()> {
+        match registry::read_string(&self.run_key, VALUE) {
+            Some(command) if points_at(&command, exe) => self.set(exe, false),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -91,149 +131,6 @@ fn same_path(text: &str, exe: &Path) -> bool {
 /// value Task Manager writes, an odd first byte (`03`, `07`) means "disabled".
 fn approved(flag: &[u8]) -> bool {
     flag.first().is_none_or(|byte| byte % 2 == 0)
-}
-
-#[cfg(windows)]
-mod registry {
-    use std::io;
-
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW,
-        RegSetKeyValueW,
-    };
-
-    fn wide(text: &str) -> Vec<u16> {
-        text.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    /// The raw value, or `None` when it is missing or of another type.
-    fn read(key: &str, value: &str, kind: u32) -> Option<Vec<u8>> {
-        let (key, value) = (wide(key), wide(value));
-        let mut len = 0u32;
-        // SAFETY: a null buffer with a length pointer asks for the size only.
-        let status = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                value.as_ptr(),
-                kind,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut len,
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return None;
-        }
-        let mut data = vec![0u8; len as usize];
-        // SAFETY: `data` is `len` bytes long, which is what the call is told.
-        let status = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                value.as_ptr(),
-                kind,
-                std::ptr::null_mut(),
-                data.as_mut_ptr().cast(),
-                &mut len,
-            )
-        };
-        (status == ERROR_SUCCESS).then(|| {
-            data.truncate(len as usize);
-            data
-        })
-    }
-
-    pub fn read_string(key: &str, value: &str) -> Option<String> {
-        let bytes = read(key, value, RRF_RT_REG_SZ)?;
-        let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
-        let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
-        Some(String::from_utf16_lossy(&units[..end]))
-    }
-
-    pub fn read_bytes(key: &str, value: &str) -> Option<Vec<u8>> {
-        read(key, value, RRF_RT_REG_BINARY)
-    }
-
-    /// Creates the key if it is not there yet.
-    pub fn write_string(key: &str, value: &str, text: &str) -> io::Result<()> {
-        let (key, value, text) = (wide(key), wide(value), wide(text));
-        // SAFETY: all three are NUL-terminated; the length is in bytes and
-        // includes the terminator, as `REG_SZ` expects.
-        let status = unsafe {
-            RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                value.as_ptr(),
-                REG_SZ,
-                text.as_ptr().cast(),
-                (text.len() * 2) as u32,
-            )
-        };
-        if status == ERROR_SUCCESS { Ok(()) } else { Err(io::Error::from_raw_os_error(status as i32)) }
-    }
-
-    /// Deleting what is not there is a success.
-    pub fn delete_value(key: &str, value: &str) -> io::Result<()> {
-        let (key, value) = (wide(key), wide(value));
-        // SAFETY: both strings are NUL-terminated and outlive the call.
-        let status = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
-        match status {
-            ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
-            other => Err(io::Error::from_raw_os_error(other as i32)),
-        }
-    }
-
-    #[cfg(test)]
-    pub fn write_bytes(key: &str, value: &str, bytes: &[u8]) {
-        use windows_sys::Win32::System::Registry::REG_BINARY;
-        let (key, value) = (wide(key), wide(value));
-        // SAFETY: `bytes` is valid for its own length.
-        let status = unsafe {
-            RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                value.as_ptr(),
-                REG_BINARY,
-                bytes.as_ptr().cast(),
-                bytes.len() as u32,
-            )
-        };
-        assert_eq!(status, ERROR_SUCCESS);
-    }
-
-    #[cfg(test)]
-    pub fn delete_tree(key: &str) {
-        use windows_sys::Win32::System::Registry::RegDeleteTreeW;
-        let key = wide(key);
-        // SAFETY: the string is NUL-terminated and outlives the calls.
-        unsafe {
-            RegDeleteTreeW(HKEY_CURRENT_USER, key.as_ptr());
-            windows_sys::Win32::System::Registry::RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
-        }
-    }
-}
-
-#[cfg(not(windows))]
-mod registry {
-    use std::io;
-
-    pub fn read_string(_key: &str, _value: &str) -> Option<String> {
-        None
-    }
-
-    pub fn read_bytes(_key: &str, _value: &str) -> Option<Vec<u8>> {
-        None
-    }
-
-    pub fn write_string(_key: &str, _value: &str, _text: &str) -> io::Result<()> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
-
-    pub fn delete_value(_key: &str, _value: &str) -> io::Result<()> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
 }
 
 #[cfg(test)]
@@ -314,6 +211,27 @@ mod tests {
         assert!(!autostart.enabled(exe));
         autostart.set(exe, true).unwrap();
         assert!(autostart.enabled(exe));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repointing_moves_an_entry_but_never_creates_one_or_lifts_a_veto() {
+        let scratch = Scratch::new("repoint");
+        let (autostart, exe) = (Autostart::under(&scratch.0), Path::new(EXE));
+        assert!(!autostart.repoint(exe).unwrap());
+        assert!(registry::read_string(&autostart.run_key, VALUE).is_none(), "no entry stays no entry");
+
+        autostart.set(Path::new(r"C:\old\chronodesk.exe"), true).unwrap();
+        registry::write_bytes(&autostart.approved_key, VALUE, &[3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(autostart.repoint(exe).unwrap());
+        assert_eq!(registry::read_string(&autostart.run_key, VALUE).as_deref(), Some(command_line(exe).as_str()));
+        assert!(!autostart.enabled(exe), "switched off in Task Manager stays switched off");
+        assert!(!autostart.repoint(exe).unwrap(), "already there");
+
+        autostart.remove_if_ours(Path::new(r"C:\elsewhere\chronodesk.exe")).unwrap();
+        assert!(registry::read_string(&autostart.run_key, VALUE).is_some(), "not ours to remove");
+        autostart.remove_if_ours(exe).unwrap();
+        assert!(registry::read_string(&autostart.run_key, VALUE).is_none());
     }
 
     #[cfg(windows)]

@@ -83,6 +83,10 @@ pub struct Config {
     /// or a logout. Written by the app, not meant to be edited; `None` is idle.
     pub stopwatch: Option<Saved>,
     pub countdown: Option<Saved>,
+    /// True until the welcome card has been dismissed once. Only a launch that
+    /// finds no config file at all starts out with it set: a file from before
+    /// the field existed belongs to someone who knows the app already.
+    pub first_run: bool,
     /// Window position in points. `None` means "let the OS place it".
     pub window: Option<WindowPos>,
 }
@@ -114,12 +118,19 @@ impl Default for Config {
             timer_sound: true,
             stopwatch: None,
             countdown: None,
+            first_run: true,
             window: None,
         }
     }
 }
 
 impl Config {
+    /// The defaults for someone who has a config file, however little of it
+    /// could be used: everything a first launch gets, except the welcome.
+    pub fn returning() -> Self {
+        Self { first_run: false, ..Self::default() }
+    }
+
     /// Clamps values that later code relies on being in range.
     fn validated(mut self, warnings: &mut Vec<String>) -> Self {
         let minutes = self.timer_minutes.clamp(1, MAX_TIMER_MINUTES);
@@ -207,7 +218,7 @@ pub fn load(path: &Path) -> Loaded {
         }
         Err(err) => {
             warnings.push(format!("could not read {}: {err}", path.display()));
-            return Loaded { config: Config::default(), warnings, quarantined: None, migrated: false };
+            return Loaded { config: Config::returning(), warnings, quarantined: None, migrated: false };
         }
     };
 
@@ -216,7 +227,7 @@ pub fn load(path: &Path) -> Loaded {
         None => {
             warnings.push("file is not valid RON; starting from defaults".to_owned());
             let quarantined = quarantine(path, &mut warnings);
-            return Loaded { config: Config::default(), warnings, quarantined, migrated: false };
+            return Loaded { config: Config::returning(), warnings, quarantined, migrated: false };
         }
     };
 
@@ -231,7 +242,7 @@ pub fn load(path: &Path) -> Loaded {
     if version > SCHEMA_VERSION {
         warnings.push(format!("file uses schema {version}, this build knows {SCHEMA_VERSION}; starting from defaults"));
         let quarantined = quarantine(path, &mut warnings);
-        return Loaded { config: Config::default(), warnings, quarantined, migrated: false };
+        return Loaded { config: Config::returning(), warnings, quarantined, migrated: false };
     }
     if version < SCHEMA_VERSION && (fields.contains_key("app") || fields.contains_key("window")) {
         return Loaded {
@@ -242,7 +253,7 @@ pub fn load(path: &Path) -> Loaded {
         };
     }
 
-    let mut config = Config::default();
+    let mut config = Config::returning();
     field(&mut fields, "mode", &mut config.mode, &mut warnings);
     field(&mut fields, "timer_minutes", &mut config.timer_minutes, &mut warnings);
     field(&mut fields, "size", &mut config.size, &mut warnings);
@@ -266,6 +277,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "timer_sound", &mut config.timer_sound, &mut warnings);
     field(&mut fields, "stopwatch", &mut config.stopwatch, &mut warnings);
     field(&mut fields, "countdown", &mut config.countdown, &mut warnings);
+    field(&mut fields, "first_run", &mut config.first_run, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -866,6 +878,28 @@ mod tests {
     }
 
     #[test]
+    fn only_a_launch_without_any_file_is_a_first_run() {
+        let dir = Dir::new("first_run");
+        let path = dir.file();
+        assert!(load(&path).config.first_run, "no file: never started before");
+
+        write(&path, "(schema_version:1,mode:\"timer\")");
+        let loaded = load(&path);
+        assert!(!loaded.config.first_run, "a file from before the field: not a newcomer");
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        // Saved before the card was dismissed: it is shown again.
+        save(&path, &Config::default()).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("first_run: true"));
+        assert!(load(&path).config.first_run);
+        save(&path, &Config { first_run: false, ..Default::default() }).unwrap();
+        assert!(!load(&path).config.first_run);
+
+        write(&path, "this is not RON");
+        assert!(!load(&path).config.first_run, "a broken file still means someone was here");
+    }
+
+    #[test]
     fn unknown_fields_are_reported_and_ignored() {
         let dir = Dir::new("unknown");
         let path = dir.file();
@@ -884,7 +918,7 @@ mod tests {
         write(&path, "(schema_version:1, mode:\"clo");
 
         let loaded = load(&path);
-        assert_eq!(loaded.config, Config::default());
+        assert_eq!(loaded.config, Config::returning(), "defaults, minus the welcome");
         let backup = loaded.quarantined.expect("corrupt file should be kept");
         assert_eq!(backup, path.with_extension("ron.bak"));
         assert_eq!(fs::read_to_string(&backup).unwrap(), "(schema_version:1, mode:\"clo");
@@ -897,7 +931,7 @@ mod tests {
         write(&path, "(schema_version:99,mode:\"timer\")");
 
         let loaded = load(&path);
-        assert_eq!(loaded.config, Config::default());
+        assert_eq!(loaded.config, Config::returning());
         assert!(loaded.quarantined.is_some());
         assert!(loaded.warnings.iter().any(|w| w.contains("schema 99")), "{:?}", loaded.warnings);
     }

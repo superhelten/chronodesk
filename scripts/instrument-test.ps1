@@ -72,13 +72,15 @@ function WaitState([string]$pattern, [int]$timeoutMs = 5000) {
   $state
 }
 # Every reply queues a repaint, so two reads a moment apart must show the frame
-# count moving. If it does not, the app has stopped drawing altogether: its
-# window is minimised (Win+D) or its tray menu is open, which blocks the event
-# loop for as long as it stays open. Nothing measured after that means
-# anything, so the run stops with one line instead of a page of failures.
+# count moving. If it does not, the app has stopped drawing altogether, which
+# is what a minimised window does (measured: no frames, no commands applied,
+# until it is restored). A test instance has no minimise style bit, no tray
+# icon and never takes the focus, so this should not happen any more; if it
+# does, nothing measured afterwards means anything, and the run stops with one
+# line instead of a page of failures.
 function Assert-Drawing([string]$where) {
   $a = Field (Send "stats") 'frames'; Start-Sleep -Milliseconds 400; $b = Field (Send "stats") 'frames'
-  if ($b -le $a) { throw "the app stopped drawing before '$where' (window minimised, or its tray menu left open?) - not a test failure; rerun" }
+  if ($b -le $a) { throw "the app stopped drawing before '$where' (is its window minimised?) - not a test failure; rerun" }
 }
 
 $results = @(); $proc = $null
