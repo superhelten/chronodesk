@@ -311,6 +311,8 @@ Without the feature the flag only prints a notice: there is no listener, no thre
 
 ## Layout
 
+Why the code is shaped the way it is: see [docs/architecture.md](docs/architecture.md).
+
 - `src/main.rs` – window setup (transparent, borderless, always-on-top, hidden from taskbar)
 - `src/app.rs` – state, rendering, window sizing, repaint scheduling
 - `src/theme.rs` – visual tokens: colours, alphas and proportions
