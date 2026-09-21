@@ -23,7 +23,8 @@ $sums = foreach ($name in 'ChronoDesk-Setup.exe', 'ChronoDesk.exe') {
   Copy-Item (Join-Path $repo 'target\dist\release\chronodesk.exe') $file -Force
   "{0}  {1}" -f (Get-FileHash $file -Algorithm SHA256).Hash.ToLower(), $name
 }
-Set-Content (Join-Path $dist 'SHA256SUMS.txt') ($sums -join "`n")
+# Plain LF line endings, so `sha256sum -c` reads every line.
+[IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), ($sums -join "`n") + "`n")
 
 $sums
 "{0:n2} MB each" -f ((Get-Item $setup).Length / 1MB)
