@@ -11,7 +11,7 @@
 #
 # Runs under its own CHRONODESK_CONFIG and leaves a running overlay alone; the
 # window is click-through for the run, so a real pointer cannot dismiss the
-# card by accident. Leaves scripts/instr_welcome.png behind for a look.
+# card by accident.
 #
 # Run after: cargo build --release --features instrument
 $ErrorActionPreference = 'Stop'
@@ -21,7 +21,6 @@ $portFile = "$env:TEMP\chronodesk-instrument.port"
 $scratch = Join-Path $env:TEMP 'chronodesk-welcome-test'
 $ron = Join-Path $scratch 'app.ron'
 
-Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text;
 public static class W {
@@ -68,17 +67,6 @@ function Quit {
   if (-not $proc.WaitForExit(5000)) { $proc.Kill(); $proc.WaitForExit() }
   $client.Close(); $script:client = $null; $script:writer = $null
 }
-function Shot($name) {
-  $script:ov = [IntPtr]::Zero
-  [W]::EnumWindows({ param($h, $l) $pid2 = 0; [W]::GetWindowThreadProcessId($h, [ref]$pid2) | Out-Null
-    if ($pid2 -eq $proc.Id) { $sb = New-Object System.Text.StringBuilder 64; [W]::GetClassName($h, $sb, 64) | Out-Null
-      if ($sb.ToString() -eq "Window Class" -and [W]::IsWindowVisible($h)) { $script:ov = $h } }
-    return $true }, [IntPtr]::Zero) | Out-Null
-  $r = New-Object W+RECT; [W]::GetWindowRect($script:ov, [ref]$r) | Out-Null
-  $b = New-Object System.Drawing.Bitmap ($r.R - $r.L), ($r.B - $r.T)
-  $g = [System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen($r.L, $r.T, 0, 0, $b.Size); $g.Dispose()
-  $b.Save("$s\$name.png"); $b.Dispose()
-}
 
 $results = @()
 try {
@@ -91,7 +79,6 @@ try {
   $results += Check "first launch: the welcome card is up" ($state -match 'welcome=1') $state
   $results += Check "first launch: it is a card, not a clock-sized window" ((Field $state 'win_w') -ge 300 -and (Field $state 'win_h') -ge 150) ("{0} x {1} pt" -f (Field $state 'win_w'), (Field $state 'win_h'))
   Start-Sleep 2
-  Shot "instr_welcome"
   Send "stats reset" | Out-Null
   Start-Sleep 8
   $idle = Send "stats"

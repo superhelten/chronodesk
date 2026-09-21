@@ -16,7 +16,6 @@ $scratch = Join-Path $env:TEMP 'chronodesk-instrument-test'
 $ron = Join-Path $scratch 'app.ron'
 $portFile = "$env:TEMP\chronodesk-instrument.port"
 
-Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System; using System.Runtime.InteropServices; using System.Text;
 public static class I {
@@ -48,15 +47,6 @@ function Rect($proc) {
       if ($sb.ToString() -eq "Window Class" -and [I]::IsWindowVisible($h)) { $script:ov = $h } }
     return $true }, [IntPtr]::Zero) | Out-Null
   $r = New-Object I+RECT; [I]::GetWindowRect($script:ov, [ref]$r) | Out-Null; $r
-}
-function Shot($name) {
-  $r = Rect $proc
-  $b = New-Object System.Drawing.Bitmap ($r.R - $r.L), ($r.B - $r.T)
-  $g = [System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen($r.L, $r.T, 0, 0, $b.Size); $g.Dispose()
-  $z = New-Object System.Drawing.Bitmap ($b.Width * 2), ($b.Height * 2)
-  $gz = [System.Drawing.Graphics]::FromImage($z); $gz.InterpolationMode = 'NearestNeighbor'
-  $gz.DrawImage($b, 0, 0, $z.Width, $z.Height); $gz.Dispose()
-  $z.Save("$s\$name.png"); $b.Dispose(); $z.Dispose()
 }
 function Field($report, $name) {
   if ($report -match "$name=([0-9.]+)") { [double]$matches[1] } else { $null }
@@ -131,7 +121,6 @@ try {
   $state = WaitState 'controls=1'
   $results += Check "hover: the controls are drawn" ($state -match 'controls=1') $state
   Start-Sleep 1
-  Shot "instr_hover"
   Send "stats reset" | Out-Null
   Start-Sleep 8
   $hover = Send "stats"
@@ -144,7 +133,6 @@ try {
   $state = WaitState 'sw_running=1'
   $results += Check "click: the start button starts the stopwatch" ($state -match 'sw_running=1') $state
   Start-Sleep 2
-  Shot "instr_running"
   Send "stats reset" | Out-Null
   Start-Sleep 10
   $running = Send "stats"
@@ -156,7 +144,6 @@ try {
   Send "cmd startpause" | Out-Null
   Send "hover off" | Out-Null
   Start-Sleep 2
-  Shot "instr_released"
   Send "stats reset" | Out-Null
   Start-Sleep 12
   $after = Send "stats"
@@ -181,7 +168,6 @@ try {
     Start-Sleep -Milliseconds 300
   }
   Start-Sleep 2
-  Shot "instr_appearance"
   $after = Field (Send "stats") 'rebuilds'
   $results += Check "appearance: no layout rebuilds" ($before -eq $after) "rebuilds $before -> $after"
   # Every reply queues a repaint; let the one from the read above land
@@ -204,17 +190,12 @@ try {
   $beforeFont = Field (Send "stats") 'rebuilds'
   Send "cmd digital" | Out-Null
   Start-Sleep 2
-  Shot "instr_digital"
   $digitalOn = Field (Send "stats") 'rebuilds'
   $results += Check "digital font: exactly one rebuild" ($digitalOn -eq ($beforeFont + 1)) "rebuilds $beforeFont -> $digitalOn"
-  # The small size is where the segment gaps approach a pixel; keep a shot
-  # of each size for inspection.
   Send "cmd size:small" | Out-Null
   Start-Sleep 1
-  Shot "instr_digital_small"
   Send "cmd size:large" | Out-Null
   Start-Sleep 1
-  Shot "instr_digital_large"
   Send "cmd size:medium" | Out-Null
   Start-Sleep 1
   $digitalOn = Field (Send "stats") 'rebuilds'
@@ -226,7 +207,6 @@ try {
   $results += Check "digital clock idle: ui pass under 2 ms" ((Field $digitalClock 'mean_ms') -lt 2.0) ("mean " + (Field $digitalClock 'mean_ms') + " ms, max " + (Field $digitalClock 'max_ms') + " ms")
   Send "cmd backdrop" | Out-Null
   Start-Sleep 1
-  Shot "instr_digital_backdrop"
   Send "cmd backdrop" | Out-Null
   Send "cmd mode:stopwatch" | Out-Null
   Start-Sleep 2
@@ -260,7 +240,6 @@ try {
   $beforeBoard = Field (Send "stats") 'rebuilds'
   Send "cmd mode:market" | Out-Null
   Start-Sleep 2
-  Shot "instr_market"
   $r1 = Rect $proc
   $afterBoard = Field (Send "stats") 'rebuilds'
   $results += Check "market: mode switch rebuilds nothing" ($afterBoard -eq $beforeBoard) "rebuilds $beforeBoard -> $afterBoard"
@@ -286,11 +265,10 @@ try {
   Start-Sleep 12
   $marketMin = Send "stats"
   $results += Check "market without seconds: at most one tick in 12 s" ((Field $marketMin 'frames') -le 3) $marketMin
-  Shot "instr_market_minutes"
-  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_market_backdrop"; Send "cmd backdrop" | Out-Null
-  Send "cmd 12h" | Out-Null; Start-Sleep 1; Shot "instr_market_12h"; Send "cmd 12h" | Out-Null
-  Send "cmd digital" | Out-Null; Start-Sleep 1; Shot "instr_market_digital"; Send "cmd digital" | Out-Null
-  Send "cmd chroma" | Out-Null; Start-Sleep 1; Shot "instr_market_chroma"; Send "cmd chroma" | Out-Null
+  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Send "cmd backdrop" | Out-Null
+  Send "cmd 12h" | Out-Null; Start-Sleep 1; Send "cmd 12h" | Out-Null
+  Send "cmd digital" | Out-Null; Start-Sleep 1; Send "cmd digital" | Out-Null
+  Send "cmd chroma" | Out-Null; Start-Sleep 1; Send "cmd chroma" | Out-Null
   Send "cmd seconds" | Out-Null
   Start-Sleep 1
   # Adding an exchange from the menu adds a row; it lays out one new label
@@ -298,12 +276,11 @@ try {
   $beforeRow = Field (Send "stats") 'rebuilds'
   Send "cmd market:hong-kong" | Out-Null
   Start-Sleep 1
-  Shot "instr_market_six"
   $afterRow = Field (Send "stats") 'rebuilds'
   $results += Check "market: adding a row rebuilds nothing" ($afterRow -eq $beforeRow) "rebuilds $beforeRow -> $afterRow"
   Send "cmd market:hong-kong" | Out-Null
-  Send "cmd size:small" | Out-Null; Start-Sleep 1; Shot "instr_market_small"
-  Send "cmd size:large" | Out-Null; Start-Sleep 1; Shot "instr_market_large"
+  Send "cmd size:small" | Out-Null; Start-Sleep 1
+  Send "cmd size:large" | Out-Null; Start-Sleep 1
   Send "cmd size:medium" | Out-Null
   # And a paused stopwatch still sleeps after a visit to the board.
   Send "cmd mode:stopwatch" | Out-Null
@@ -321,7 +298,6 @@ try {
   $beforeStrip = Field (Send "stats") 'rebuilds'
   Send "cmd horizontal" | Out-Null
   Start-Sleep 2
-  Shot "instr_market_strip"
   $s1 = Rect $proc
   Start-Sleep 1
   Send "stats reset" | Out-Null
@@ -332,10 +308,8 @@ try {
   $results += Check "strip: window size stable across ticks" ((($s1.R - $s1.L) -eq ($s2.R - $s2.L)) -and (($s1.B - $s1.T) -eq ($s2.B - $s2.T))) ("{0}x{1} -> {2}x{3}" -f ($s1.R - $s1.L), ($s1.B - $s1.T), ($s2.R - $s2.L), ($s2.B - $s2.T))
   Send "cmd codes" | Out-Null
   Start-Sleep 1
-  Shot "instr_market_strip_codes"
   Send "cmd horizontal" | Out-Null
   Start-Sleep 1
-  Shot "instr_market_codes"
   $afterStrip = Field (Send "stats") 'rebuilds'
   $results += Check "strip and codes: no layout rebuilds" ($afterStrip -eq $beforeStrip) "rebuilds $beforeStrip -> $afterStrip"
   Send "cmd codes" | Out-Null
@@ -351,7 +325,6 @@ try {
   $beforeRing = Field (Send "stats") 'rebuilds'
   Send "cmd ring" | Out-Null
   Start-Sleep 2
-  Shot "instr_ring"
   $afterRing = Field (Send "stats") 'rebuilds'
   $results += Check "ring: no layout rebuild" ($afterRing -eq $beforeRing) "rebuilds $beforeRing -> $afterRing"
   Start-Sleep 1
@@ -361,15 +334,14 @@ try {
   $results += Check "ring, minutes only: ~1 fps for the ring" ((Field $ringClock 'fps') -ge 0.95 -and (Field $ringClock 'fps') -le 1.2) $ringClock
   $results += Check "ring: every frame is a scheduled tick" ((Field $ringClock 'tick') -eq (Field $ringClock 'frames')) ""
   $results += Check "ring: ui pass under 2 ms" ((Field $ringClock 'mean_ms') -lt 2.0) ("mean " + (Field $ringClock 'mean_ms') + " ms, max " + (Field $ringClock 'max_ms') + " ms")
-  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_ring_backdrop"
+  Send "cmd backdrop" | Out-Null; Start-Sleep 1
   foreach ($p in 'green', 'red', 'yellow', 'studio') {
     Send "cmd palette:$p" | Out-Null
     Start-Sleep 1
-    Shot "instr_palette_$p"
   }
-  Send "cmd mode:stopwatch" | Out-Null; Start-Sleep 1; Shot "instr_studio_stopwatch"
-  Send "cmd size:small" | Out-Null; Start-Sleep 1; Shot "instr_ring_small"
-  Send "cmd size:large" | Out-Null; Start-Sleep 1; Shot "instr_ring_large"
+  Send "cmd mode:stopwatch" | Out-Null; Start-Sleep 1
+  Send "cmd size:small" | Out-Null; Start-Sleep 1
+  Send "cmd size:large" | Out-Null; Start-Sleep 1
   Send "cmd size:medium" | Out-Null
   Send "cmd backdrop" | Out-Null
   Start-Sleep 2
@@ -377,21 +349,21 @@ try {
   Start-Sleep 12
   $ringPaused = Send "stats"
   $results += Check "ring, stopwatch paused: no timed frames" ((Field $ringPaused 'tick') -eq 0) $ringPaused
-  Send "cmd digital" | Out-Null; Send "cmd mode:clock" | Out-Null; Start-Sleep 1; Shot "instr_ring_digital"
+  Send "cmd digital" | Out-Null; Send "cmd mode:clock" | Out-Null; Start-Sleep 1
   # The hardware dressing: ghost segments under the digits, LED sockets and
   # quarter markers on the ring, hairlines between the board's modules. All
   # of it is paint, none of it geometry, so the frame cost is what matters.
-  Send "cmd backdrop" | Out-Null; Start-Sleep 1; Shot "instr_hardware_clock"
-  Send "cmd mode:market" | Out-Null; Start-Sleep 1; Shot "instr_hardware_board"
-  Send "cmd horizontal" | Out-Null; Start-Sleep 1; Shot "instr_hardware_strip"
+  Send "cmd backdrop" | Out-Null; Start-Sleep 1
+  Send "cmd mode:market" | Out-Null; Start-Sleep 1
+  Send "cmd horizontal" | Out-Null; Start-Sleep 1
   # The dot-matrix face is a third face in the layout key: one rebuild in,
   # one back, like the seven-segment one.
   $beforeMatrix = Field (Send "stats") 'rebuilds'
-  Send "cmd font:matrix" | Out-Null; Start-Sleep 1; Shot "instr_matrix_strip"
+  Send "cmd font:matrix" | Out-Null; Start-Sleep 1
   $matrixOn = Field (Send "stats") 'rebuilds'
   $results += Check "dot matrix: exactly one rebuild" ($matrixOn -eq ($beforeMatrix + 1)) "rebuilds $beforeMatrix -> $matrixOn"
-  Send "cmd horizontal" | Out-Null; Start-Sleep 1; Shot "instr_matrix_board"
-  Send "cmd mode:clock" | Out-Null; Start-Sleep 1; Shot "instr_matrix_clock"
+  Send "cmd horizontal" | Out-Null; Start-Sleep 1
+  Send "cmd mode:clock" | Out-Null; Start-Sleep 1
   Send "cmd font:digital" | Out-Null; Start-Sleep 1
   Start-Sleep 1
   Send "stats reset" | Out-Null
