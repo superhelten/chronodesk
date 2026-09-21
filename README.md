@@ -1,10 +1,37 @@
 # ChronoDesk
 
-Minimalist transparent desktop overlay: clock, stopwatch and timer. Rust + `eframe`/`egui` (glow renderer) + `tray-icon`.
+A small, transparent always-on-top clock for the Windows desktop, styled after studio and trading-floor
+hardware clocks: a clock, a stopwatch, a countdown timer and a **world market board** that shows which
+stock exchanges are open right now.
+
+<p align="center">
+  <img src="docs/screenshots/board.png" width="420" alt="Market board: New York, London and Oslo trading, Tokyo and Sydney closed, in a green dot-matrix face">
+  <img src="docs/screenshots/ring.gif" width="420" alt="Clock with the studio seconds ring filling up LED by LED">
+</p>
+<p align="center">
+  <img src="docs/screenshots/board-strip.png" width="860" alt="The board as a one-line strip with exchange codes">
+</p>
+<p align="center">
+  <img src="docs/screenshots/timer.png" width="270" alt="Countdown timer in red seven-segment with the seconds ring">
+  <img src="docs/screenshots/clock-segment.png" width="270" alt="Clock in red seven-segment with the date">
+  <img src="docs/screenshots/stopwatch.png" width="270" alt="Stopwatch in a yellow dot-matrix face">
+</p>
+
+- **Market board** — New York, London, Oslo, Frankfurt, Mumbai, Shanghai, Hong Kong, Tokyo and Sydney:
+  local time, open / lunch break / closed, and a countdown to the next open or close. Computed
+  locally: no network, no account, no time-zone database.
+- **Hardware looks** — dot-matrix or seven-segment LED faces with ghosted unlit segments, a studio
+  seconds ring with sixty LEDs, and industrial colour presets (green, red, yellow, studio green/red).
+- **Stays out of the way** — click-through lock, night dimming, chroma-key background for streaming,
+  a stopwatch or timer that survives a reboot, and a chime when the timer runs out.
+- **Light** — one ~5.5 MB exe with no assets, ~40 MB RAM, one frame per second when idle. No admin
+  rights, no telemetry.
+
+**Windows 10/11 only** for now. The code builds on macOS but that path is untested.
 
 ## Install
 
-Download `ChronoDesk-Setup.exe` and run it. There is no wizard: it copies itself to
+Download `ChronoDesk-Setup.exe` from the [latest release](../../releases/latest) and run it. There is no wizard: it copies itself to
 `%LOCALAPPDATA%\ChronoDesk\chronodesk.exe`, adds a Start menu shortcut and an entry under *Installed
 apps*, and starts the overlay, which greets a first-time user with a card of tips. Nothing asks for
 administrator rights, because everything it touches belongs to the user.
@@ -314,3 +341,14 @@ Without the feature the flag only prints a notice: there is no listener, no thre
   accounting resolution.
 - Memory: ~40 MB private working set / ~65 MB private bytes, almost all of it the graphics driver.
   glow was chosen after measuring: wgpu used 130–310 MB private working set.
+
+## Screenshots
+
+The images in `docs/screenshots` are rendered off screen, not captured: `src/shots.rs` draws the real
+overlay into a PNG with a pinned clock (no window, no desktop), and a script puts the renders on a
+backdrop. Rerun both after a visual change:
+
+```sh
+cargo test shots -- --ignored            # target/shots/*.png, transparent, 2x
+python scripts/compose-shots.py          # docs/screenshots/ (needs Pillow)
+```
