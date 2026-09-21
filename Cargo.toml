@@ -3,7 +3,7 @@ name = "chronodesk"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-description = "Minimalist transparent desktop overlay clock, stopwatch and timer"
+description = "Transparent always-on-top desktop clock, stopwatch, timer and world market board"
 license = "MIT"
 
 [features]
@@ -44,3 +44,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[dev-dependencies]
+egui_kittest = { version = "0.36.2", features = ["wgpu", "eframe"] }
+image = { version = "0.25", default-features = false, features = ["png"] }

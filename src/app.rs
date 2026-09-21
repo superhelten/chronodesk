@@ -203,6 +203,9 @@ pub struct ChronoApp {
     signals: Receiver<Signal>,
     /// Since when the overlay is outlined because another launch asked for it.
     attention: Option<Instant>,
+    /// A fixed wall clock for off-screen rendering; see [`Self::pinned`].
+    #[cfg(test)]
+    pinned: Option<DateTime<Local>>,
 }
 
 /// How long to wait after the last change before writing the config file.
@@ -229,22 +232,6 @@ impl ChronoApp {
         let repaired = !loaded.warnings.is_empty() || loaded.quarantined.is_some() || loaded.migrated;
         let settings = loaded.config;
 
-        install_display_font(&cc.egui_ctx);
-        // A counter that was under way picks up where the wall clock says it is.
-        let (now, wall) = (Instant::now(), SystemTime::now());
-        let duration = minutes(settings.timer_minutes);
-        let stopwatch = settings.stopwatch.map_or_else(Stopwatch::default, |saved| Stopwatch::restore(saved, now, wall));
-        let countdown = settings
-            .countdown
-            .map_or_else(|| Countdown::new(duration), |saved| Countdown::restore(duration, saved, now, wall));
-
-        let autostart = Autostart::system();
-        let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
-        let autostart_on = (exe.as_deref().is_some_and(|exe| autostart.enabled(exe)), Instant::now());
-        if !settings.always_on_top {
-            cc.egui_ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
-        }
-
         let config_path = config::config_path();
         let (tx, signals) = mpsc::channel();
         if let Some(path) = &config_path {
@@ -261,8 +248,40 @@ impl ChronoApp {
             });
         }
         let instrument = Instrument::start(&cc.egui_ctx);
+        let tray = Tray::new(&cc.egui_ctx, !instrument.active());
+        let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
+        let mut app = Self::assemble(&cc.egui_ctx, settings, config_path, signals, tray, instrument, exe);
+        app.dirty_since = repaired.then(Instant::now);
+        Ok(app)
+    }
 
-        Ok(Self {
+    /// Everything [`Self::new`] builds that does not reach outside the process:
+    /// the config path, signal listener, tray icon and exe are decided by the caller.
+    fn assemble(
+        ctx: &egui::Context,
+        settings: Config,
+        config_path: Option<PathBuf>,
+        signals: Receiver<Signal>,
+        tray: Tray,
+        instrument: Instrument,
+        exe: Option<PathBuf>,
+    ) -> Self {
+        install_display_font(ctx);
+        // A counter that was under way picks up where the wall clock says it is.
+        let (now, wall) = (Instant::now(), SystemTime::now());
+        let duration = minutes(settings.timer_minutes);
+        let stopwatch = settings.stopwatch.map_or_else(Stopwatch::default, |saved| Stopwatch::restore(saved, now, wall));
+        let countdown = settings
+            .countdown
+            .map_or_else(|| Countdown::new(duration), |saved| Countdown::restore(duration, saved, now, wall));
+
+        let autostart = Autostart::system();
+        let autostart_on = (exe.as_deref().is_some_and(|exe| autostart.enabled(exe)), Instant::now());
+        if !settings.always_on_top {
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
+        }
+
+        Self {
             welcome: settings.first_run,
             signals,
             attention: None,
@@ -273,12 +292,12 @@ impl ChronoApp {
             pending_move: None,
             settings,
             config_path,
-            dirty_since: repaired.then(Instant::now),
+            dirty_since: None,
             locked: false,
             stopwatch,
             alarm: Alarm::default(),
             chimes: 0,
-            tray: Tray::new(&cc.egui_ctx, !instrument.active()),
+            tray,
             instrument,
             layout: DerivedLayout::new(&Theme::default()),
             theme: Theme::default(),
@@ -288,7 +307,35 @@ impl ChronoApp {
             autostart,
             exe,
             autostart_on,
-        })
+            #[cfg(test)]
+            pinned: None,
+        }
+    }
+
+    /// An overlay for rendering off screen: no config file, no signal listener,
+    /// no tray icon, and the wall clock pinned to `at`. See `shots.rs`.
+    #[cfg(test)]
+    pub fn pinned(ctx: &egui::Context, settings: Config, at: DateTime<Local>) -> Self {
+        let signals = mpsc::channel().1;
+        let tray = Tray::new(ctx, false);
+        let mut app = Self::assemble(ctx, settings, None, signals, tray, Instrument::start(ctx), None);
+        app.pinned = Some(at);
+        app
+    }
+
+    /// The size the overlay last asked the OS for, in points.
+    #[cfg(test)]
+    pub fn requested_size(&self) -> Option<Vec2> {
+        self.window_size
+    }
+
+    /// The wall clock, or the pinned one when rendering off screen.
+    fn wall_clock(&self) -> DateTime<Local> {
+        #[cfg(test)]
+        if let Some(at) = self.pinned {
+            return at;
+        }
+        Local::now()
     }
 
     /// Notes the current window position and writes the config once it has been
@@ -800,7 +847,7 @@ impl eframe::App for ChronoApp {
         s.backdrop |= self.welcome;
         // One reading of the wall clock per frame, shared by the readout and
         // the night schedule so they can never disagree about the time.
-        let local = Local::now();
+        let local = self.wall_clock();
         let night_wake = self.apply_night(local);
         let readout = self.readout(now, local);
         let painter = ui.painter().clone();

@@ -26,6 +26,9 @@ mod tray;
 mod tz;
 mod welcome;
 
+#[cfg(test)]
+mod shots;
+
 use eframe::egui;
 
 fn main() -> eframe::Result {
