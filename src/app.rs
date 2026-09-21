@@ -1324,10 +1324,10 @@ mod tests {
     #[test]
     fn toggling_from_the_default_board_appends_in_catalogue_order() {
         let mut markets = Market::DEFAULT.to_vec();
-        toggle_market(&mut markets, Market::HongKong);
+        toggle_market(&mut markets, Market::Oslo);
         assert_eq!(
             markets,
-            vec![Market::NewYork, Market::London, Market::Oslo, Market::HongKong, Market::Tokyo, Market::Sydney]
+            vec![Market::NewYork, Market::London, Market::Oslo, Market::Frankfurt, Market::HongKong, Market::Tokyo]
         );
     }
 }

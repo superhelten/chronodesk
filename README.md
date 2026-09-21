@@ -5,7 +5,7 @@ hardware clocks: a clock, a stopwatch, a countdown timer and a **world market bo
 stock exchanges are open right now.
 
 <p align="center">
-  <img src="docs/screenshots/board.png" width="420" alt="Market board: New York, London and Oslo trading, Tokyo and Sydney closed, in a green dot-matrix face">
+  <img src="docs/screenshots/board.png" width="420" alt="Market board: New York, London and Frankfurt trading, Hong Kong and Tokyo closed, in a green dot-matrix face">
   <img src="docs/screenshots/ring.gif" width="420" alt="Clock with the studio seconds ring filling up LED by LED">
 </p>
 <p align="center">
@@ -67,10 +67,11 @@ source in streaming software.
 
 The *Markets* mode shows one row per exchange with its local time and a status dot: green while
 trading, amber during a lunch break, hollow when closed. The line underneath says what happens
-next, such as "Oslo closes in 45m".
+next, such as "London closes in 1h 45m".
 
 The built-in exchanges are New York, London, Oslo, Frankfurt, Mumbai, Shanghai, Hong Kong, Tokyo
-and Sydney. Choose which ones to show under *Exchanges*, where you can also lay the board out on
+and Sydney. The board starts with New York, London, Frankfurt, Hong Kong and Tokyo; choose
+which ones to show under *Exchanges*, where you can also lay the board out on
 one line and show exchange codes (NYSE, LSE, OSE…) instead of city names.
 
 Opening hours are regular weekday sessions, including lunch breaks, with daylight saving time

@@ -29,8 +29,7 @@ use crate::timer::Saved;
 const SCALE: f32 = 2.0;
 
 /// For the board: a Tuesday at 13:45:37 UTC, when New York has just opened,
-/// London and Oslo are trading, Oslo's close is the next thing to happen, and
-/// Asia is shut.
+/// London and Frankfurt are trading, and Hong Kong and Tokyo are shut.
 fn board_time() -> DateTime<Local> {
     Utc.with_ymd_and_hms(2026, 9, 22, 13, 45, 37).unwrap().with_timezone(&Local)
 }

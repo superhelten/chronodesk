@@ -44,8 +44,8 @@ impl Market {
         Self::Tokyo,
         Self::Sydney,
     ];
-    /// One row per continent that trades.
-    pub const DEFAULT: [Self; 5] = [Self::NewYork, Self::London, Self::Oslo, Self::Tokyo, Self::Sydney];
+    /// The largest exchanges across the trading day, west to east.
+    pub const DEFAULT: [Self; 5] = [Self::NewYork, Self::London, Self::Frankfurt, Self::HongKong, Self::Tokyo];
 
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|m| m.id().eq_ignore_ascii_case(id))
@@ -374,6 +374,9 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
 
+    /// A fixed board for the tests, so they do not follow changes to the default.
+    const BOARD: [Market; 5] = [Market::NewYork, Market::London, Market::Oslo, Market::Tokyo, Market::Sydney];
+
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(y, mo, d).unwrap().and_hms_opt(h, mi, 0).unwrap()
     }
@@ -469,7 +472,7 @@ mod tests {
     /// is in the afternoon, Asia has closed, Sydney is past midnight.
     #[test]
     fn the_board_shows_each_market_in_its_own_time() {
-        let b = board(at(2026, 9, 18, 14, 0), &Market::DEFAULT, H24);
+        let b = board(at(2026, 9, 18, 14, 0), &BOARD, H24);
         let rows: Vec<(&str, &str, Status)> = b.rows.iter().map(|r| (r.label, r.time.as_str(), r.status)).collect();
         assert_eq!(
             rows,
@@ -488,16 +491,16 @@ mod tests {
     #[test]
     fn the_caption_names_the_soonest_event_across_the_board() {
         // 14:00 UTC Friday: London closes 15:30 UTC, Oslo 14:30 UTC, New York 20:00 UTC.
-        let b = board(at(2026, 9, 18, 14, 0), &Market::DEFAULT, H24);
+        let b = board(at(2026, 9, 18, 14, 0), &BOARD, H24);
         assert_eq!(b.caption, "OSLO CLOSES IN 30M");
         // 14:31 UTC: Oslo is done, London is next.
-        let b = board(at(2026, 9, 18, 14, 31), &Market::DEFAULT, H24);
+        let b = board(at(2026, 9, 18, 14, 31), &BOARD, H24);
         assert_eq!(b.caption, "LONDON CLOSES IN 59M");
         // Saturday: the earliest Monday open is 00:00 UTC, shared by Tokyo and
         // Sydney (AEST, no daylight time until October); the first row wins a tie.
-        let b = board(at(2026, 9, 19, 12, 0), &Market::DEFAULT, H24);
+        let b = board(at(2026, 9, 19, 12, 0), &BOARD, H24);
         assert_eq!(b.caption, "TOKYO OPENS IN 1D 12H");
-        let b = board(at(2026, 9, 20, 23, 0), &Market::DEFAULT, H24);
+        let b = board(at(2026, 9, 20, 23, 0), &BOARD, H24);
         assert_eq!(b.caption, "TOKYO OPENS IN 1H");
         let b = board(at(2026, 9, 20, 23, 0), &[Market::Sydney, Market::Tokyo], H24);
         assert_eq!(b.caption, "SYDNEY OPENS IN 1H");
@@ -539,15 +542,15 @@ mod tests {
     #[test]
     fn the_board_ticks_by_the_minute_unless_seconds_are_shown() {
         let t = at(2026, 9, 18, 14, 0).with_second(37).unwrap().with_nanosecond(250_000_000).unwrap();
-        assert_eq!(board(t, &Market::DEFAULT, H24).until_change, Duration::from_millis(22_750));
-        assert_eq!(board(t, &Market::DEFAULT, style(ClockFormat::H24, true)).until_change, Duration::from_millis(750));
+        assert_eq!(board(t, &BOARD, H24).until_change, Duration::from_millis(22_750));
+        assert_eq!(board(t, &BOARD, style(ClockFormat::H24, true)).until_change, Duration::from_millis(750));
     }
 
     /// With codes the rows and the caption both use them, so the caption
     /// never names a market in a way the board does not.
     #[test]
     fn codes_name_the_rows_and_the_caption_alike() {
-        let b = board(at(2026, 9, 18, 14, 0), &Market::DEFAULT, CODES);
+        let b = board(at(2026, 9, 18, 14, 0), &BOARD, CODES);
         let labels: Vec<&str> = b.rows.iter().map(|r| r.label).collect();
         assert_eq!(labels, vec!["NYSE", "LSE", "OSE", "TSE", "ASX"]);
         assert_eq!(b.caption, "OSE CLOSES IN 30M");
