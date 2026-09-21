@@ -1,7 +1,10 @@
-# Builds what gets handed out: dist\ChronoDesk-Setup.exe and its SHA-256.
+# Builds what gets handed out: dist\ChronoDesk-Setup.exe, dist\ChronoDesk.exe
+# and dist\SHA256SUMS.txt.
 #
-# The setup is the app itself under another name (see src/install.rs), so
-# "packaging" is a release build and a copy. It is built into its own target
+# The two exes are the same file. Under a name containing "setup" it installs
+# itself; under any other name it runs in place, which is the portable download.
+#
+# So "packaging" is a release build and two copies (see src/install.rs). It is built into its own target
 # directory: a release build, without the `instrument` feature the test
 # scripts need in target\release, and not blocked by an overlay that happens
 # to be running from there.
@@ -14,9 +17,13 @@ cargo build --release --manifest-path (Join-Path $repo 'Cargo.toml') --target-di
 if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
 
 New-Item -ItemType Directory -Force $dist | Out-Null
-Copy-Item (Join-Path $repo 'target\dist\release\chronodesk.exe') $setup -Force
-$hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
-Set-Content (Join-Path $dist 'ChronoDesk-Setup.exe.sha256') "$hash  ChronoDesk-Setup.exe" -NoNewline
+Remove-Item (Join-Path $dist '*.sha256') -ErrorAction SilentlyContinue
+$sums = foreach ($name in 'ChronoDesk-Setup.exe', 'ChronoDesk.exe') {
+  $file = Join-Path $dist $name
+  Copy-Item (Join-Path $repo 'target\dist\release\chronodesk.exe') $file -Force
+  "{0}  {1}" -f (Get-FileHash $file -Algorithm SHA256).Hash.ToLower(), $name
+}
+Set-Content (Join-Path $dist 'SHA256SUMS.txt') ($sums -join "`n")
 
-"{0}  ({1:n2} MB)" -f $setup, ((Get-Item $setup).Length / 1MB)
-"sha256  $hash"
+$sums
+"{0:n2} MB each" -f ((Get-Item $setup).Length / 1MB)

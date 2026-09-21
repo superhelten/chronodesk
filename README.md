@@ -31,15 +31,20 @@ stock exchanges are open right now.
 
 ## Install
 
-Download `ChronoDesk-Setup.exe` from the [latest release](../../releases/latest) and run it. It
-copies itself to `%LOCALAPPDATA%\ChronoDesk`, adds a Start menu shortcut and an entry under
-*Installed apps*, and starts the overlay. It does not need administrator rights.
+Download from the [latest release](../../releases/latest):
+
+- **`ChronoDesk-Setup.exe`** installs the app. It copies itself to `%LOCALAPPDATA%\ChronoDesk`,
+  adds a Start menu shortcut and an entry under *Installed apps*, and starts the overlay. It does
+  not need administrator rights.
+- **`ChronoDesk.exe`** is the portable version. Put it anywhere and run it; nothing is installed.
+
+Both are the same program. `SHA256SUMS.txt` lists their checksums.
 
 Running a newer setup later replaces the installed version and keeps your settings. To uninstall,
 use *Settings → Apps → Installed apps*, or run `chronodesk.exe --uninstall`. Your settings in
 `%APPDATA%\chronodesk` are left in place.
 
-The exe is not code-signed yet, so Windows SmartScreen may warn about an unrecognised app. Choose
+The exes are not code-signed yet, so Windows SmartScreen may warn about an unrecognised app. Choose
 *More info → Run anyway*.
 
 ## Using it
@@ -112,7 +117,7 @@ Requires Rust 1.95 or newer.
 ```sh
 cargo run --release              # build and run the overlay
 cargo test                       # unit tests
-pwsh -File scripts/package.ps1   # dist\ChronoDesk-Setup.exe and its SHA-256
+pwsh -File scripts/package.ps1   # dist\: setup and portable exe, SHA256SUMS.txt
 ```
 
 The scripts in `scripts/` test the running app end to end. They need a build with
