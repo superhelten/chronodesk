@@ -157,8 +157,12 @@ serde_by_id!(Size, "size");
 /// starts interactive so it can never come up unreachable.
 pub struct ChronoApp {
     settings: Config,
-    /// Last state written to disk, so saving only happens on real changes.
+    /// Last state written to disk, or that failed to be, so saving only
+    /// happens on real changes: a file that cannot be written would otherwise
+    /// be retried on every wake-up, and keep an idle overlay drawing.
     saved: Config,
+    /// The last write failed; quitting tries once more.
+    save_failed: bool,
     config_path: Option<PathBuf>,
     /// Set when `settings` differs from `saved`; writes are delayed so dragging
     /// the window doesn't hit the disk on every frame.
@@ -233,6 +237,9 @@ impl ChronoApp {
         let settings = loaded.config;
 
         let config_path = config::config_path();
+        // The file is there and holds the user's settings; it just could not be
+        // read. This session's defaults must not be written over it.
+        let writable_path = config_path.clone().filter(|_| !loaded.unreadable);
         let (tx, signals) = mpsc::channel();
         if let Some(path) = &config_path {
             let ctx = cc.egui_ctx.clone();
@@ -250,7 +257,7 @@ impl ChronoApp {
         let instrument = Instrument::start(&cc.egui_ctx);
         let tray = Tray::new(&cc.egui_ctx, !instrument.active());
         let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
-        let mut app = Self::assemble(&cc.egui_ctx, settings, config_path, signals, tray, instrument, exe);
+        let mut app = Self::assemble(&cc.egui_ctx, settings, writable_path, signals, tray, instrument, exe);
         app.dirty_since = repaired.then(Instant::now);
         Ok(app)
     }
@@ -292,6 +299,7 @@ impl ChronoApp {
             pending_move: None,
             settings,
             config_path,
+            save_failed: false,
             dirty_since: None,
             locked: false,
             stopwatch,
@@ -366,11 +374,13 @@ impl ChronoApp {
 
     fn write_config(&mut self) {
         self.dirty_since = None;
+        self.saved = self.settings.clone();
         let Some(path) = &self.config_path else { return };
-        match config::save(path, &self.settings) {
-            Ok(()) => self.saved = self.settings.clone(),
-            Err(err) => eprintln!("ChronoDesk: could not save config: {err}"),
+        let result = config::save(path, &self.settings);
+        if let Err(err) = &result {
+            eprintln!("ChronoDesk: could not save config: {err}");
         }
+        self.save_failed = result.is_err();
     }
 
     /// True once the window sits where we last asked it to, so its reported
@@ -1076,7 +1086,7 @@ impl eframe::App for ChronoApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if self.settings != self.saved {
+        if self.settings != self.saved || self.save_failed {
             self.write_config();
         }
     }
@@ -1312,6 +1322,58 @@ mod tests {
         assert_eq!(markets, vec![Market::Tokyo, Market::London, Market::Sydney]);
         toggle_market(&mut markets, Market::Oslo);
         assert_eq!(markets, vec![Market::Tokyo, Market::London, Market::Oslo, Market::Sydney]);
+    }
+
+    /// A file that cannot be written (read-only, locked, a folder in its place)
+    /// gets one attempt per change, not one every [`SAVE_DELAY`] for as long as
+    /// the app runs, which would keep an idle overlay drawing. Quitting tries
+    /// once more.
+    #[test]
+    fn a_failed_save_waits_for_the_next_change() {
+        let dir = std::env::temp_dir().join(format!("chronodesk_test_save_fail_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("app.ron");
+        std::fs::create_dir_all(&path).unwrap(); // a folder where the file goes: the rename fails
+
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        app.config_path = Some(path.clone());
+        let t0 = Instant::now();
+
+        app.settings.backdrop = true;
+        app.persist(&ctx, t0);
+        assert!(app.dirty_since.is_some());
+        app.persist(&ctx, t0 + SAVE_DELAY);
+        assert!(app.dirty_since.is_none(), "the attempt was made");
+        app.persist(&ctx, t0 + SAVE_DELAY * 2);
+        assert!(app.dirty_since.is_none(), "and is not repeated without a change");
+
+        app.settings.chroma = true;
+        app.persist(&ctx, t0 + SAVE_DELAY * 3);
+        assert!(app.dirty_since.is_some(), "a new change is tried again");
+
+        // The folder goes away and quitting gets the settings out after all.
+        app.persist(&ctx, t0 + SAVE_DELAY * 4);
+        std::fs::remove_dir(&path).unwrap();
+        eframe::App::on_exit(&mut app, None);
+        let saved = config::load(&path).config;
+        assert!(saved.backdrop && saved.chroma, "written on exit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No path to write to (a file that could not be read, or no config
+    /// directory at all): a change is noted once and then left be.
+    #[test]
+    fn without_a_file_to_write_a_change_does_not_keep_the_app_awake() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        let t0 = Instant::now();
+        app.settings.backdrop = true;
+        app.persist(&ctx, t0);
+        app.persist(&ctx, t0 + SAVE_DELAY);
+        app.persist(&ctx, t0 + SAVE_DELAY * 2);
+        assert!(app.dirty_since.is_none());
+        assert!(!app.save_failed, "nothing was tried");
     }
 
     #[test]

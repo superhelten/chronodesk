@@ -12,11 +12,14 @@
 //!
 //! Only a wholly unparseable file (or one written by a newer schema) is
 //! rejected, and it is copied to `app.ron.bak` before anything overwrites it.
+//! A file that exists but cannot be read at all is not replaced either: the
+//! session runs on defaults and leaves it alone ([`Loaded::unreadable`]).
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use ron::Value;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -176,7 +179,22 @@ pub struct Loaded {
     pub quarantined: Option<PathBuf>,
     /// True when the file was written by an older schema and should be rewritten.
     pub migrated: bool,
+    /// The file is there but could not be read. It still holds the user's
+    /// settings, so nothing may be written over it this session.
+    pub unreadable: bool,
 }
+
+impl Loaded {
+    /// Defaults for someone who has a file, used when that file cannot be.
+    pub fn fallback(warnings: Vec<String>, quarantined: Option<PathBuf>) -> Self {
+        Self { config: Config::returning(), warnings, quarantined, migrated: false, unreadable: false }
+    }
+}
+
+/// A scanner or backup tool may hold the file for a moment at logon, which is
+/// exactly when an app that starts with Windows reads it.
+const READ_ATTEMPTS: u32 = 4;
+const READ_PAUSE: Duration = Duration::from_millis(150);
 
 /// Names a config file outright, bypassing the platform location. Used by the
 /// test harness so a run can be driven against a scratch file instead of the
@@ -211,15 +229,20 @@ fn config_path_from(overridden: Option<std::ffi::OsString>, base: Option<PathBuf
 pub fn load(path: &Path) -> Loaded {
     let mut warnings = Vec::new();
 
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
+    let bytes = match read(path) {
+        Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Loaded { config: Config::default(), warnings, quarantined: None, migrated: false };
+            return Loaded { config: Config::default(), ..Loaded::fallback(warnings, None) };
         }
         Err(err) => {
-            warnings.push(format!("could not read {}: {err}", path.display()));
-            return Loaded { config: Config::returning(), warnings, quarantined: None, migrated: false };
+            warnings.push(format!("could not read {}: {err}; it will not be saved over", path.display()));
+            return Loaded { unreadable: true, ..Loaded::fallback(warnings, None) };
         }
+    };
+    let Some(text) = decode(&bytes, &mut warnings) else {
+        warnings.push("file is not UTF-8 or UTF-16 text; starting from defaults".to_owned());
+        let quarantined = quarantine(path, &mut warnings);
+        return Loaded::fallback(warnings, quarantined);
     };
 
     let mut fields = match parse_fields(&text) {
@@ -227,30 +250,36 @@ pub fn load(path: &Path) -> Loaded {
         None => {
             warnings.push("file is not valid RON; starting from defaults".to_owned());
             let quarantined = quarantine(path, &mut warnings);
-            return Loaded { config: Config::returning(), warnings, quarantined, migrated: false };
+            return Loaded::fallback(warnings, quarantined);
         }
     };
 
+    // eframe nested its values as RON strings. Our own files have a `window`
+    // too, so the key alone does not tell them apart; the shape of it does.
+    let eframe = [fields.get("app"), fields.get("window")].into_iter().any(|v| matches!(v, Some(Value::String(_))));
     // A file from a newer build may give familiar names new meanings, so keep a
-    // copy rather than reinterpreting it.
+    // copy rather than reinterpreting it. A version that is not a number could
+    // be anything, and is treated the same way.
     let version = match fields.get("schema_version").cloned().map(Value::into_rust::<u32>) {
         Some(Ok(v)) => v,
-        Some(Err(_)) => 0,
-        // Files written by eframe's persistence have no version field.
-        None => 0,
+        Some(Err(_)) => {
+            warnings.push("'schema_version' is not a number; starting from defaults".to_owned());
+            let quarantined = quarantine(path, &mut warnings);
+            return Loaded::fallback(warnings, quarantined);
+        }
+        // Files written by eframe's persistence have no version field; one of
+        // ours without it has been edited by hand and is read as it stands.
+        None if eframe => 0,
+        None => SCHEMA_VERSION,
     };
     if version > SCHEMA_VERSION {
         warnings.push(format!("file uses schema {version}, this build knows {SCHEMA_VERSION}; starting from defaults"));
         let quarantined = quarantine(path, &mut warnings);
-        return Loaded { config: Config::returning(), warnings, quarantined, migrated: false };
+        return Loaded::fallback(warnings, quarantined);
     }
-    if version < SCHEMA_VERSION && (fields.contains_key("app") || fields.contains_key("window")) {
-        return Loaded {
-            config: migrate_from_eframe(&fields, &mut warnings),
-            warnings,
-            quarantined: None,
-            migrated: true,
-        };
+    if version < SCHEMA_VERSION && eframe {
+        let config = migrate_from_eframe(&fields, &mut warnings);
+        return Loaded { config, migrated: true, ..Loaded::fallback(warnings, None) };
     }
 
     let mut config = Config::returning();
@@ -284,7 +313,41 @@ pub fn load(path: &Path) -> Loaded {
         warnings.push(format!("unknown field '{key}' ignored"));
     }
 
-    Loaded { config: config.validated(&mut warnings), warnings, quarantined: None, migrated: false }
+    Loaded { config: config.validated(&mut warnings), ..Loaded::fallback(warnings, None) }
+}
+
+fn read(path: &Path) -> io::Result<Vec<u8>> {
+    let mut attempt = 1;
+    loop {
+        match fs::read(path) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound && attempt < READ_ATTEMPTS => {
+                attempt += 1;
+                std::thread::sleep(READ_PAUSE);
+            }
+            result => return result,
+        }
+    }
+}
+
+/// The file as text: UTF-8 with or without a byte-order mark, or UTF-16 LE
+/// with one, which is what Windows PowerShell 5.1 writes by default. `None`
+/// for anything else.
+fn decode(bytes: &[u8], warnings: &mut Vec<String>) -> Option<String> {
+    if let Some(utf8) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+        return String::from_utf8(utf8.to_vec()).ok();
+    }
+    if let Some(utf16) = bytes.strip_prefix(b"\xFF\xFE") {
+        let (pairs, odd) = utf16.as_chunks::<2>();
+        if !odd.is_empty() {
+            return None;
+        }
+        let units = pairs.iter().map(|&pair| u16::from_le_bytes(pair));
+        let text = char::decode_utf16(units).collect::<Result<String, _>>().ok()?;
+        // Reported so the file is written back, as UTF-8.
+        warnings.push("file is UTF-16; rewriting it as UTF-8".to_owned());
+        return Some(text);
+    }
+    String::from_utf8(bytes.to_vec()).ok()
 }
 
 /// Writes via a temp file so the target is either the old or the new content,
@@ -436,7 +499,9 @@ fn migrate_from_eframe(fields: &HashMap<String, Value>, warnings: &mut Vec<Strin
         outer_position_pixels: Option<WindowPos>,
     }
 
-    let mut config = Config::default();
+    // eframe's file is from before the welcome card, and from someone who has
+    // used the app.
+    let mut config = Config::returning();
 
     if let Some(Value::String(app)) = fields.get("app") {
         match ron::from_str::<LegacySettings>(app) {
@@ -956,6 +1021,107 @@ mod tests {
         assert_eq!(loaded.config.schema_version, SCHEMA_VERSION);
         assert!(loaded.migrated, "a legacy file must be flagged for rewriting");
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn a_migrated_eframe_file_skips_the_welcome() {
+        let dir = Dir::new("legacy_welcome");
+        let path = dir.file();
+        write(&path, r#"{"app": "(mode:Clock)"}"#);
+
+        let loaded = load(&path);
+        assert!(loaded.migrated);
+        assert!(!loaded.config.first_run, "eframe's file belongs to someone who has used the app");
+    }
+
+    /// Every file this app writes has a `window`, so the eframe test has to
+    /// look at the shape of the value rather than at the key alone.
+    #[test]
+    fn a_current_file_without_a_version_is_not_mistaken_for_eframes() {
+        let dir = Dir::new("no_version");
+        let path = dir.file();
+        write(&path, "(mode:\"timer\",timer_minutes:45,window:Some((x:10.0,y:20.0)))");
+
+        let loaded = load(&path);
+        assert!(!loaded.migrated);
+        assert_eq!(loaded.config.mode, Mode::Timer);
+        assert_eq!(loaded.config.timer_minutes, 45);
+        assert_eq!(loaded.config.window, Some(WindowPos { x: 10.0, y: 20.0 }));
+        assert!(!loaded.config.first_run);
+    }
+
+    #[test]
+    fn a_version_that_is_not_a_number_is_quarantined() {
+        let dir = Dir::new("version_type");
+        let path = dir.file();
+        let text = "(schema_version:\"1\",mode:\"timer\",window:Some((x:10.0,y:20.0)))";
+        write(&path, text);
+
+        let loaded = load(&path);
+        assert!(!loaded.migrated, "not eframe's file");
+        assert_eq!(loaded.config, Config::returning());
+        let backup = loaded.quarantined.expect("kept aside, not reinterpreted");
+        assert_eq!(fs::read_to_string(backup).unwrap(), text);
+        assert!(loaded.warnings.iter().any(|w| w.contains("schema_version")), "{:?}", loaded.warnings);
+    }
+
+    /// Windows PowerShell 5.1 writes UTF-8 with a BOM (`Set-Content -Encoding
+    /// UTF8`) or UTF-16 (`>`, `Out-File`); a hand edit made that way is still
+    /// the user's settings.
+    #[test]
+    fn a_file_saved_with_a_byte_order_mark_is_read() {
+        let dir = Dir::new("bom");
+        let path = dir.file();
+        let text = "(schema_version:1,mode:\"timer\",timer_minutes:45)";
+
+        fs::write(&path, [b"\xEF\xBB\xBF".as_slice(), text.as_bytes()].concat()).unwrap();
+        let loaded = load(&path);
+        assert_eq!((loaded.config.mode, loaded.config.timer_minutes), (Mode::Timer, 45));
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let utf16: Vec<u8> = [0xFEFF_u16].into_iter().chain(text.encode_utf16()).flat_map(u16::to_le_bytes).collect();
+        fs::write(&path, utf16).unwrap();
+        let loaded = load(&path);
+        assert_eq!((loaded.config.mode, loaded.config.timer_minutes), (Mode::Timer, 45));
+        assert!(loaded.quarantined.is_none());
+        assert!(
+            loaded.warnings.iter().any(|w| w.contains("UTF-16")),
+            "reported, so the file is written back as UTF-8: {:?}",
+            loaded.warnings
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_text_is_quarantined_byte_for_byte() {
+        let dir = Dir::new("latin1");
+        let path = dir.file();
+        let bytes = b"(schema_version:1,mode:\"timer\") // K\xF8benhavn".to_vec();
+        fs::write(&path, &bytes).unwrap();
+
+        let loaded = load(&path);
+        assert_eq!(loaded.config, Config::returning());
+        let backup = loaded.quarantined.expect("kept aside");
+        assert_eq!(fs::read(backup).unwrap(), bytes);
+    }
+
+    /// A file that is there but cannot be read (a scanner holding it at logon,
+    /// missing permissions) still holds the user's settings: the session runs
+    /// on defaults and must not write them over it.
+    #[test]
+    fn an_unreadable_file_is_not_to_be_overwritten() {
+        let dir = Dir::new("unreadable");
+        let path = dir.file();
+        fs::create_dir(&path).unwrap(); // reading a directory fails, and not with NotFound
+
+        let loaded = load(&path);
+        assert!(loaded.unreadable);
+        assert_eq!(loaded.config, Config::returning());
+        assert!(loaded.quarantined.is_none());
+        assert!(!loaded.warnings.is_empty());
+
+        write(&dir.0.join("ok.ron"), "(schema_version:1)");
+        assert!(!load(&dir.0.join("ok.ron")).unreadable);
+        assert!(!load(&dir.0.join("absent.ron")).unreadable);
     }
 
     #[test]

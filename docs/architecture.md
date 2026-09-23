@@ -37,13 +37,22 @@ Losing settings is worse than failing to save them, so:
 - Loading reads the file untyped first and converts each field on its own. An
   invalid value falls back to its default and the rest is kept; the repaired
   file is written back.
-- A file that cannot be parsed, or that has a newer `schema_version` than the
-  build knows, is copied to `app.ron.bak` and the app starts from defaults.
+- A file that cannot be parsed, is not UTF-8 or UTF-16 text, or has a
+  `schema_version` that is newer than the build knows or not a number, is
+  copied to `app.ron.bak` and the app starts from defaults. A byte-order mark
+  is accepted, since Windows PowerShell 5.1 writes one.
+- A file that exists but cannot be read (a scanner holding it at logon, which
+  is when autostart reads it) is retried for about half a second. If it still
+  fails, the session runs on defaults and never writes over it.
+- eframe's old file is recognised by its values being nested RON strings, not
+  by its keys: every file this app writes has a `window` too.
 - Every field is flat and has a default, so adding a setting does not need a
   schema change. `SCHEMA_VERSION` is still 1.
 
 Settings are written 1.5 seconds after the last change and on exit. Counter
-state is the exception and is written immediately (see below).
+state is the exception and is written immediately (see below). A write that
+fails is not retried until the next change or exit, so an unwritable file
+cannot keep an idle overlay waking up.
 
 ## Drawing and repainting
 

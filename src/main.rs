@@ -58,14 +58,9 @@ fn main() -> eframe::Result {
     // front instead of making the overlay jump after the first frame.
     let loaded = config_path.as_deref().map(config::load).unwrap_or_else(|| {
         eprintln!("ChronoDesk: no config directory; settings will not be saved");
-        config::Loaded {
-            // Without a file the welcome could never be marked as seen, and
-            // would be back at every launch.
-            config: config::Config::returning(),
-            warnings: Vec::new(),
-            quarantined: None,
-            migrated: false,
-        }
+        // Without a file the welcome could never be marked as seen, and
+        // would be back at every launch.
+        config::Loaded::fallback(Vec::new(), None)
     });
     let position = loaded.config.window.map_or([80.0, 80.0], |w| [w.x, w.y]);
 
