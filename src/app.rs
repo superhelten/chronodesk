@@ -28,6 +28,7 @@ use crate::text::{display_family, install_display_font, label_family, measure_gl
 use crate::theme::{self, Theme};
 use crate::timer::{self, Alarm, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
+use crate::update::{self, Version};
 use crate::welcome;
 
 /// How long a finished timer blinks before settling on a steady colour.
@@ -207,6 +208,14 @@ pub struct ChronoApp {
     exe: Option<PathBuf>,
     /// The registry's answer and when it was read.
     autostart_on: (bool, Instant),
+    /// A check for a newer release on its own thread, until it answers:
+    /// the latest version, or `None` when it could not be found out.
+    update_check: Option<Receiver<Option<Version>>>,
+    /// After a failed check, when the next may go out.
+    update_retry: Option<Instant>,
+    /// Only the real overlay asks GitHub: not a script's, and not one being
+    /// rendered off screen in a test.
+    updates_allowed: bool,
     /// The welcome card is up instead of the readout.
     welcome: bool,
     /// Word from later launches: show yourself, or quit for the installer.
@@ -266,7 +275,9 @@ impl ChronoApp {
         let instrument = Instrument::start(&cc.egui_ctx);
         let tray = Tray::new(&cc.egui_ctx, !instrument.active());
         let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
+        let updates_allowed = !instrument.active();
         let mut app = Self::assemble(&cc.egui_ctx, settings, writable_path, signals, tray, instrument, exe);
+        app.updates_allowed = updates_allowed;
         app.dirty_since = repaired.then(Instant::now);
         Ok(app)
     }
@@ -275,7 +286,7 @@ impl ChronoApp {
     /// the config path, signal listener, tray icon and exe are decided by the caller.
     fn assemble(
         ctx: &egui::Context,
-        settings: Config,
+        mut settings: Config,
         config_path: Option<PathBuf>,
         signals: Receiver<Signal>,
         tray: Tray,
@@ -283,6 +294,10 @@ impl ChronoApp {
         exe: Option<PathBuf>,
     ) -> Self {
         install_display_font(ctx);
+        // An offer the running version has caught up with is withdrawn: the
+        // user has updated since it was found.
+        settings.update_available =
+            settings.update_available.take().filter(|v| Version::parse(v).is_some_and(|v| v > Version::current()));
         // A counter that was under way picks up where the wall clock says it is.
         let (now, wall) = (Instant::now(), SystemTime::now());
         let duration = minutes(settings.timer_minutes);
@@ -310,6 +325,9 @@ impl ChronoApp {
             config_path,
             save_failed: false,
             save_retry: None,
+            update_check: None,
+            update_retry: None,
+            updates_allowed: false,
             dirty_since: None,
             locked: false,
             stopwatch,
@@ -536,6 +554,47 @@ impl ChronoApp {
         }
     }
 
+    /// Looks for a newer release once a day, deciding on frames that are drawn
+    /// anyway: it never wakes the overlay for it. The request runs on a thread
+    /// of its own, and its answer costs one frame.
+    fn check_for_updates(&mut self, ctx: &egui::Context, now: Instant) {
+        if let Some(pending) = &self.update_check {
+            let answer = match pending.try_recv() {
+                Ok(answer) => answer,
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => None,
+            };
+            self.update_check = None;
+            match answer {
+                Some(latest) => {
+                    self.settings.update_checked = epoch_s(SystemTime::now());
+                    self.settings.update_available = (latest > Version::current()).then(|| latest.to_string());
+                }
+                None => self.update_retry = Some(now + update::RETRY_AFTER),
+            }
+        }
+        let retry_passed = self.update_retry.is_none_or(|at| now >= at);
+        if !self.updates_allowed
+            || !self.settings.check_updates
+            || !retry_passed
+            || !update::due(self.settings.update_checked, epoch_s(SystemTime::now()))
+        {
+            return;
+        }
+        self.update_retry = None;
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new().name("update check".to_owned()).spawn(move || {
+            let latest = update::latest().inspect_err(|err| eprintln!("ChronoDesk: update check failed: {err}")).ok();
+            let _ = tx.send(latest);
+            ctx.request_repaint();
+        });
+        match spawned {
+            Ok(_) => self.update_check = Some(rx),
+            Err(_) => self.update_retry = Some(now + update::RETRY_AFTER),
+        }
+    }
+
     /// A running counter is saved as the wall-clock moment it started, which
     /// only adds up as long as nobody sets the clock. When somebody has (a
     /// time sync, by hand), what was saved would come back after a restart
@@ -643,6 +702,18 @@ impl ChronoApp {
             Command::ToggleAutostart => self.toggle_autostart(now),
             Command::ShowWelcome => self.welcome = true,
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Command::OpenUpdate => {
+                if let Some(version) = s.update_available.as_deref().and_then(Version::parse) {
+                    update::open_release_page(version);
+                }
+            }
+            Command::ToggleUpdateCheck => {
+                s.check_updates = !s.check_updates;
+                // Switched off, it offers nothing it found before either.
+                if !s.check_updates {
+                    s.update_available = None;
+                }
+            }
         }
         if counters_touched {
             self.save_counters(now);
@@ -737,6 +808,8 @@ impl ChronoApp {
             always_on_top: s.always_on_top,
             autostart: self.autostart_on.0,
             autostart_available: self.exe.is_some(),
+            check_updates: s.check_updates,
+            update_available: s.update_available.clone(),
         }
     }
 
@@ -1125,6 +1198,7 @@ impl eframe::App for ChronoApp {
 
         self.recheck_autostart(now);
         self.follow_clock_changes(now);
+        self.check_for_updates(&ctx, now);
         let state = self.menu_state(now);
         self.tray.sync(state);
         self.persist(&ctx, now, window_position_px(&ctx, frame));
@@ -1493,6 +1567,10 @@ fn window_position_px(ctx: &egui::Context, frame: &eframe::Frame) -> Option<Pos2
     ctx.input(|i| i.viewport().outer_rect).map(|rect| pos2(rect.min.x * ppp, rect.min.y * ppp))
 }
 
+fn epoch_s(wall: SystemTime) -> u64 {
+    wall.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
 fn minutes(min: u64) -> Duration {
     Duration::from_secs(min * 60)
 }
@@ -1669,6 +1747,46 @@ mod tests {
         app.surface(&ctx, Instant::now());
         assert!(!app.locked);
         assert!(app.attention.is_some());
+    }
+
+    /// Once the running version has caught up, the offer is withdrawn.
+    #[test]
+    fn an_update_offer_the_running_version_has_reached_is_dropped() {
+        let ctx = egui::Context::default();
+        let newer = Config { update_available: Some("999.0.0".to_owned()), ..Config::default() };
+        assert_eq!(ChronoApp::pinned(&ctx, newer, Local::now()).settings.update_available.as_deref(), Some("999.0.0"));
+        let reached = Config { update_available: Some(Version::current().to_string()), ..Config::default() };
+        assert_eq!(ChronoApp::pinned(&ctx, reached, Local::now()).settings.update_available, None);
+        let garbage = Config { update_available: Some("soon".to_owned()), ..Config::default() };
+        assert_eq!(ChronoApp::pinned(&ctx, garbage, Local::now()).settings.update_available, None);
+    }
+
+    #[test]
+    fn an_update_is_offered_at_the_top_of_the_menu_and_withdrawn() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        let now = Instant::now();
+        app.tray.sync(app.menu_state(now));
+        let (plain, offered) = app.tray.top_level();
+        assert!(!offered);
+
+        app.settings.update_available = Some("999.0.0".to_owned());
+        app.tray.sync(app.menu_state(now));
+        assert_eq!(app.tray.top_level(), (plain + 2, true), "the offer and a separator");
+
+        app.apply(Command::ToggleUpdateCheck, &ctx, now);
+        assert!(!app.settings.check_updates && app.settings.update_available.is_none());
+        app.tray.sync(app.menu_state(now));
+        assert_eq!(app.tray.top_level(), (plain, false));
+    }
+
+    /// Test instances, like a script's, never go out to the network.
+    #[test]
+    fn an_overlay_rendered_in_a_test_does_not_check_for_updates() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        app.check_for_updates(&ctx, Instant::now());
+        assert!(app.update_check.is_none());
     }
 
     #[test]

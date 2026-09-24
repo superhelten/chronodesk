@@ -25,7 +25,8 @@ stock exchanges are open right now.
 - **Stays out of the way:** click-through lock, night dimming, chroma-key background for streaming,
   a stopwatch or timer that survives a reboot, and a chime when the timer runs out.
 - **Light:** one ~5.5 MB exe with no assets, ~40 MB RAM, one frame per second when idle. No admin
-  rights, no telemetry.
+  rights, no telemetry. The only network use is one request a day to see if there is a new release,
+  which can be switched off.
 
 **Windows 10 and 11 only** for now.
 
@@ -40,12 +41,21 @@ Download from the [latest release](../../releases/latest):
 
 Both are the same program. `SHA256SUMS.txt` lists their checksums.
 
-Running a newer setup later replaces the installed version and keeps your settings. To uninstall,
-use *Settings → Apps → Installed apps*, or run `chronodesk.exe --uninstall`. Your settings in
-`%APPDATA%\chronodesk` are left in place.
+To uninstall, use *Settings → Apps → Installed apps*, or run `chronodesk.exe --uninstall`. Your
+settings in `%APPDATA%\chronodesk` are left in place.
 
 The exes are not code-signed yet, so Windows SmartScreen may warn about an unrecognised app. Choose
 *More info → Run anyway*.
+
+### Updates
+
+Once a day ChronoDesk asks GitHub which release is the latest. When there is a newer one, the menu
+starts with *Update available*, which opens the release page to download it from; running the new
+setup replaces the installed version and keeps your settings. Nothing is downloaded or installed
+by the app itself. The request goes to `github.com/superhelten/chronodesk/releases/latest`, sends
+nothing but the app's name and version, and can be switched off under *Check for updates* in the
+menu. You can also watch the repository on GitHub (*Watch → Custom → Releases*) to hear about new
+versions by e-mail.
 
 ## Using it
 
@@ -103,12 +113,13 @@ file. If a value is invalid, that one setting falls back to its default and the 
 | `night` | `"off"`, `"on"`, `"auto"` |
 | `night_from`, `night_to` | `"HH:MM"`, used by `"auto"` (default 22:00 to 07:00) |
 | `night_dim` | 0.6 to 1.0 |
+| `check_updates` | `true` / `false`: the daily check for a new release |
 | `markets` | exchange ids in display order: `"new-york"`, `"london"`, `"oslo"`, `"frankfurt"`, `"mumbai"`, `"shanghai"`, `"hong-kong"`, `"tokyo"`, `"sydney"` |
 | `board_layout` | `"vertical"`, `"horizontal"` |
 | `board_labels` | `"city"`, `"code"` |
 
-The file also holds the window position and the state of a running stopwatch or timer, which the
-app manages itself.
+The file also holds the window position, the state of a running stopwatch or timer and the last
+update check, which the app manages itself.
 
 ## Building
 

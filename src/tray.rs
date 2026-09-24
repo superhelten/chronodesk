@@ -51,7 +51,15 @@ pub enum Command {
     ToggleAutostart,
     /// Shows the welcome card again.
     ShowWelcome,
+    /// Opens the page of the newer release the update check found.
+    OpenUpdate,
+    ToggleUpdateCheck,
     Quit,
+}
+
+/// The menu's offer of a newer version.
+pub fn update_label(version: &str) -> String {
+    format!("Update available: ChronoDesk {version}…")
 }
 
 /// Menu item ids are plain strings; this is the single place they are decoded.
@@ -74,6 +82,8 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "ontop" => Command::ToggleOnTop,
         "autostart" => Command::ToggleAutostart,
         "welcome" => Command::ShowWelcome,
+        "update" => Command::OpenUpdate,
+        "checkupdates" => Command::ToggleUpdateCheck,
         "quit" => Command::Quit,
         _ => {
             let (kind, value) = id.split_once(':')?;
@@ -117,6 +127,9 @@ pub struct MenuState {
     pub always_on_top: bool,
     pub autostart: bool,
     pub autostart_available: bool,
+    pub check_updates: bool,
+    /// A newer version to offer at the top of the menu.
+    pub update_available: Option<String>,
 }
 
 pub struct Tray {
@@ -144,8 +157,13 @@ pub struct Tray {
     date: CheckMenuItem,
     on_top: CheckMenuItem,
     autostart: CheckMenuItem,
+    check_updates: CheckMenuItem,
+    /// Only in the menu while there is an update to offer.
+    update: (MenuItem, PredefinedMenuItem),
+    update_shown: bool,
     last_state: Option<MenuState>,
-    icon_locked: Option<bool>,
+    /// What the tray icon and its tooltip last showed: locked, and the update.
+    icon_state: Option<(bool, Option<String>)>,
     rx: Receiver<Command>,
 }
 
@@ -219,6 +237,8 @@ impl Tray {
         let date = check("date", "Show date");
         let on_top = check("ontop", "Always on top");
         let autostart = check("autostart", "Start with Windows");
+        let check_updates = check("checkupdates", "Check for updates");
+        let update = (MenuItem::with_id("update", "Update available", true, None), PredefinedMenuItem::separator());
         let tips = MenuItem::with_id("welcome", "Quick tips", true, None);
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
 
@@ -272,6 +292,7 @@ impl Tray {
             &appearance_menu,
             &on_top,
             &autostart,
+            &check_updates,
             &s4,
             &tips,
             &quit,
@@ -317,8 +338,11 @@ impl Tray {
             date,
             on_top,
             autostart,
+            check_updates,
+            update,
+            update_shown: false,
             last_state: None,
-            icon_locked: None,
+            icon_state: None,
             rx,
         }
     }
@@ -388,18 +412,47 @@ impl Tray {
         self.on_top.set_checked(state.always_on_top);
         self.autostart.set_checked(state.autostart);
         self.autostart.set_enabled(state.autostart_available);
+        self.check_updates.set_checked(state.check_updates);
 
-        if self.icon_locked != Some(state.locked) && let Some(tray) = &self.icon {
-            let tooltip = if state.locked {
-                "ChronoDesk — locked (click icon to unlock)"
+        // The offer heads the menu, above everything else, and is gone when
+        // there is nothing to offer.
+        match (&state.update_available, self.update_shown) {
+            (Some(version), shown) => {
+                self.update.0.set_text(update_label(version));
+                if !shown {
+                    let _ = self.menu.insert_items(&[&self.update.0, &self.update.1], 0);
+                    self.update_shown = true;
+                }
+            }
+            (None, true) => {
+                let _ = self.menu.remove(&self.update.0);
+                let _ = self.menu.remove(&self.update.1);
+                self.update_shown = false;
+            }
+            (None, false) => {}
+        }
+
+        let icon_state = (state.locked, state.update_available.clone());
+        if self.icon_state.as_ref() != Some(&icon_state) && let Some(tray) = &self.icon {
+            let mut tooltip = if state.locked {
+                "ChronoDesk — locked (click icon to unlock)".to_owned()
             } else {
-                "ChronoDesk — click icon to lock"
+                "ChronoDesk — click icon to lock".to_owned()
             };
+            if let Some(version) = &state.update_available {
+                tooltip.push_str(&format!("\nVersion {version} is available"));
+            }
             let _ = tray.set_icon(Some(tray_icon(state.locked)));
             let _ = tray.set_tooltip(Some(tooltip));
-            self.icon_locked = Some(state.locked);
+            self.icon_state = Some(icon_state);
         }
         self.last_state = Some(state);
+    }
+
+    /// The top-level items, and whether the update offer is among them.
+    #[cfg(test)]
+    pub fn top_level(&self) -> (usize, bool) {
+        (self.menu.items().len(), self.update_shown)
     }
 
     /// Forces the next [`Self::sync`] to rewrite every item, e.g. after the OS

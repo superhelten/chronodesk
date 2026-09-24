@@ -90,6 +90,13 @@ pub struct Config {
     /// finds no config file at all starts out with it set: a file from before
     /// the field existed belongs to someone who knows the app already.
     pub first_run: bool,
+    /// Ask GitHub once a day whether a newer release exists (see `update.rs`).
+    pub check_updates: bool,
+    /// When the last check succeeded, in seconds since the Unix epoch.
+    pub update_checked: u64,
+    /// The newer version that check found, so the menu offers it from the
+    /// next launch on without asking again.
+    pub update_available: Option<String>,
     /// Window position in **physical pixels**, virtual-desktop coordinates:
     /// the only unit that means the same on every monitor. A point is worth
     /// whatever the scale of the monitor under the window says, and at startup
@@ -129,6 +136,9 @@ impl Default for Config {
             stopwatch: None,
             countdown: None,
             first_run: true,
+            check_updates: true,
+            update_checked: 0,
+            update_available: None,
             window_px: None,
             window: None,
         }
@@ -317,6 +327,9 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "stopwatch", &mut config.stopwatch, &mut warnings);
     field(&mut fields, "countdown", &mut config.countdown, &mut warnings);
     field(&mut fields, "first_run", &mut config.first_run, &mut warnings);
+    field(&mut fields, "check_updates", &mut config.check_updates, &mut warnings);
+    field(&mut fields, "update_checked", &mut config.update_checked, &mut warnings);
+    field(&mut fields, "update_available", &mut config.update_available, &mut warnings);
     field(&mut fields, "window_px", &mut config.window_px, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
@@ -980,6 +993,25 @@ mod tests {
 
         write(&path, "this is not RON");
         assert!(!load(&path).config.first_run, "a broken file still means someone was here");
+    }
+
+    #[test]
+    fn update_fields_default_to_checking_and_round_trip() {
+        let dir = Dir::new("update_fields");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        let loaded = load(&path);
+        assert!(loaded.config.check_updates, "on unless switched off");
+        assert_eq!((loaded.config.update_checked, loaded.config.update_available.clone()), (0, None));
+
+        let config = Config {
+            check_updates: false,
+            update_checked: 1_800_000_000,
+            update_available: Some("0.2.0".to_owned()),
+            ..Config::returning()
+        };
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).config, config);
     }
 
     #[test]

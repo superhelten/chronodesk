@@ -58,8 +58,9 @@ Losing settings is worse than failing to save them, so:
 
 Settings are written 1.5 seconds after the last change and on exit. Counter
 state is the exception and is written immediately (see below). A write that
-fails is not retried until the next change or exit, so an unwritable file
-cannot keep an idle overlay waking up.
+fails is tried once more five seconds later, which covers a file held for a
+moment, and then not again until the next change or exit, so an unwritable
+file cannot keep an idle overlay waking up.
 
 ## Drawing and repainting
 
@@ -158,6 +159,27 @@ clears whatever of those can go.
 
 Uninstalling tries every step even when one fails, and removes the
 *Installed apps* entry last, so anything left behind can be uninstalled again.
+
+## Updates
+
+The app's one network request is a daily look at which release is the
+latest (`src/update.rs`). It asks `github.com/…/releases/latest` with
+redirects switched off and reads the version from the `Location` header: no
+API, no JSON, and nothing sent beyond a `ChronoDesk/<version>` user agent. It
+goes through WinHTTP, the HTTP stack, TLS and proxy settings Windows already
+has, rather than a crate that would roughly double the size of the exe.
+
+Whether a check is due is decided on frames that are drawn anyway, so it
+never wakes the overlay; the request runs on a thread of its own and its
+answer costs one frame. A success is written down (`update_checked`, and
+`update_available` so the offer survives a restart); a failure is tried again
+an hour later, since an overlay that starts at login often looks before the
+network is up. Script and test instances never check.
+
+A newer version is offered at the top of the menu and in the tray tooltip,
+and the menu item opens the release page. The app does not download or run
+anything itself: the exe is unsigned, and "fetch from GitHub and execute" is
+exactly what a compromised account would exploit.
 
 There is no separate installer project that could drift out of step with the
 app, and no extra toolchain.

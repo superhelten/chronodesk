@@ -24,6 +24,7 @@ mod theme;
 mod timer;
 mod tray;
 mod tz;
+mod update;
 mod welcome;
 
 #[cfg(test)]

@@ -27,12 +27,14 @@ raw-window-handle = "0.6"
 # and to enumerate the attached monitors.
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06"] }
 # For the per-monitor work area (the screen minus the taskbar), which winit does
-# not expose, the single-instance mutex and the per-user `Run` key. Pinned to the
+# not expose, the single-instance mutex, the per-user `Run` key and the daily
+# update check, which uses the HTTP stack Windows already has. Pinned to the
 # version winit already builds, so no extra crate is compiled and `HMONITOR` is
 # the same type on both sides.
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Networking_WinHttp",
     "Win32_Security",
     "Win32_System_Registry",
     "Win32_System_Threading",
