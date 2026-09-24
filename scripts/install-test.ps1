@@ -4,7 +4,7 @@
 #    registers under Installed apps, writes a Start menu shortcut that points
 #    at that path, and starts the installed copy (which greets a newcomer);
 #  - running the setup again with the same version copies nothing, leaves the
-#    running overlay running and asks it to show itself;
+#    running overlay running and asks it to show itself (quietly: does nothing);
 #  - so does simply starting the installed exe a second time, and that brings
 #    the overlay back even from minimised, where it draws nothing and has no
 #    taskbar button to be restored from;
@@ -126,13 +126,19 @@ try {
   $results += Check "install: a newcomer is greeted" ($state -match 'welcome=1') $state
 
   # --- B: the setup again, same version ------------------------------------------
+  # Quietly, as an updater would: nothing to do, and nothing done.
   $code = Run $setup '--instrument', '--quiet'
   Start-Sleep 1
   $again = Overlays
   $state = Send "state"
   $results += Check "setup again: nothing is replaced and the overlay keeps running" `
     ($code -eq 0 -and $again.Count -eq 1 -and $again[0].Id -eq $first[0].Id) "pid $($first[0].Id) -> $($again.Id -join ',')"
-  $results += Check "setup again: the running overlay shows itself" ($state -match 'attention=1') $state
+  $results += Check "setup again, quietly: the overlay is left as it was" ($state -match 'attention=0') $state
+  # Double-clicked: someone is looking for the overlay.
+  $code = Run $setup '--instrument'
+  Start-Sleep 1
+  $state = Send "state"
+  $results += Check "setup again: the running overlay shows itself" ($code -eq 0 -and $state -match 'attention=1') $state
 
   # --- C: the installed exe started a second time -----------------------------------
   Start-Sleep 4

@@ -16,7 +16,8 @@
 //!   made in the menu, and from the installed copy it names the fixed path.
 //!
 //! Running the setup again is safe at any time. With the same version installed
-//! nothing is copied and the running overlay is simply asked to show itself;
+//! nothing is copied and the running overlay is simply asked to show itself
+//! (not with `--quiet`, which then does nothing at all);
 //! with another version the running overlay is asked to quit, the exe is
 //! replaced and the new one started; run with `--quiet` while the overlay is
 //! closed, it leaves it closed. A running exe cannot be overwritten on
@@ -118,7 +119,7 @@ pub fn install(layout: &Layout, source: &Path, config: Option<&Path>) -> io::Res
         Installed::AlreadyCurrent
     } else {
         if let Some(config) = config {
-            quit_running(config);
+            quit_running(config, QUIT_TIMEOUT);
         }
         replace_exe(source, &layout.dir)?;
         Installed::Copied
@@ -141,8 +142,17 @@ pub fn install(layout: &Layout, source: &Path, config: Option<&Path>) -> io::Res
 /// the exe in it has exited, so when that exe is the one running this, the
 /// last step is left to a command that outlives it (see [`run`]).
 pub fn uninstall(layout: &Layout, config: Option<&Path>) -> io::Result<()> {
-    if let Some(config) = config {
-        quit_running(config);
+    uninstall_waiting(layout, config, QUIT_TIMEOUT)
+}
+
+fn uninstall_waiting(layout: &Layout, config: Option<&Path>, timeout: Duration) -> io::Result<()> {
+    // An overlay that stays up keeps its exe, which the clean-up after exit
+    // could then not delete; with the entry gone there would be nothing left
+    // to remove it with. So nothing is touched until it is gone.
+    if let Some(config) = config
+        && !quit_running(config, timeout)
+    {
+        return Err(io::Error::other("ChronoDesk is still running; quit it from its tray icon first"));
     }
     // Every step is tried, whatever happened to the one before.
     let steps = [
@@ -169,8 +179,8 @@ fn remove_if_there(path: &Path) -> io::Result<()> {
 
 /// Asks the overlay on `config` to exit and waits until its guard is free.
 /// False when it is still there afterwards: a build from before it listened.
-fn quit_running(config: &Path) -> bool {
-    let deadline = Instant::now() + QUIT_TIMEOUT;
+fn quit_running(config: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
     loop {
         if instance::acquire(config).is_some() {
             return true;
@@ -278,6 +288,10 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
             let upgrade = layout.exe().exists();
             let was_running = config.is_some_and(|config| instance::acquire(config).is_none());
             match install(&layout, &current, config) {
+                // Nothing was replaced and the overlay is running the same exe:
+                // a quiet run has nothing to add, and asking it to show itself
+                // would take the focus from whoever is using the machine.
+                Ok(Installed::AlreadyCurrent) if quiet && was_running => 0,
                 Ok(_) => {
                     // An overlay that neither quit nor answers is a build from
                     // before it listened; the new exe would only step aside for it.
@@ -727,6 +741,22 @@ mod tests {
         // The exe goes last, from outside the process; see `remove_dir_after_exit`.
         assert!(layout.exe().exists());
         uninstall(&layout, None).unwrap();
+    }
+
+    /// An overlay that does not quit (a build from before it listened, or a
+    /// hung one) holds the exe: the uninstall stops before it takes anything.
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_waits_for_the_overlay_and_touches_nothing_while_it_stays() {
+        let scratch = Scratch::new("uninstall_running");
+        let layout = scratch.layout();
+        install(&layout, &scratch.source("setup.exe", b"app"), None).unwrap();
+        let config = scratch.root.join("app.ron");
+        let _running = instance::acquire(&config).expect("the guard, as a deaf overlay holds it");
+
+        assert!(uninstall_waiting(&layout, Some(&config), Duration::from_millis(300)).is_err());
+        assert_eq!(registry::read_string(&layout.uninstall_key, "DisplayName").as_deref(), Some("ChronoDesk"));
+        assert!(layout.shortcut.as_ref().unwrap().exists());
     }
 
     #[cfg(windows)]
