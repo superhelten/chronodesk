@@ -25,7 +25,7 @@ use crate::night::{self, Schedule};
 use crate::placement;
 use crate::signal::{self, Signal};
 use crate::text::{display_family, install_display_font, label_family, measure_glyphs, paint_galley, paint_readout, spaced};
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 use crate::timer::{self, Alarm, Countdown, Stopwatch};
 use crate::tray::{Command, MenuState, Tray};
 use crate::welcome;
@@ -773,7 +773,7 @@ impl ChronoApp {
                     line(
                         timer::format_countdown(remaining),
                         "TIME'S UP".into(),
-                        if lit { c.alert } else { c.alert.gamma_multiply(0.25) },
+                        if lit { c.alert } else { theme::fade(c.alert, 0.25, s.chroma) },
                         blinking.then(|| Duration::from_millis(next)),
                         0,
                     )
@@ -883,8 +883,11 @@ impl eframe::App for ChronoApp {
         }
 
         let mut s = self.settings.clone();
-        // The card is text to be read, whatever is behind the overlay.
+        // The card is text to be read, whatever is behind the overlay. A
+        // chroma key is behind nothing, and a translucent backdrop over it
+        // would key out as a dark tint.
         s.backdrop |= self.welcome;
+        s.backdrop &= !s.chroma;
         // One reading of the wall clock per frame, shared by the readout and
         // the night schedule so they can never disagree about the time.
         let local = self.wall_clock();
@@ -959,7 +962,7 @@ impl eframe::App for ChronoApp {
         if s.backdrop {
             painter.rect_filled(rect, m.corner, theme.color.backdrop);
         }
-        if self.welcome {
+        if self.welcome && !s.chroma {
             // The usual backdrop lets the desktop through, which suits four
             // digits and not eight lines of prose.
             painter.rect_filled(rect, m.corner, Color32::from_black_alpha(190));
@@ -1142,7 +1145,8 @@ impl ChronoApp {
 /// glow with a whisper of the LED colour, the way an off diode does. The one
 /// that lit last blooms a little brighter than the rest, and the four
 /// quarter positions carry marker LEDs in their own colour whether lit or
-/// not. With `dressing` off (chroma key) only the lit LEDs are drawn.
+/// not. With `dressing` off (chroma key) only the lit LEDs are drawn, and
+/// without the bloom, which is translucent.
 fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, lit: usize, halo: Option<f32>, dressing: bool) {
     let track = rect.shrink(m.ring_band / 2.0);
     let corner = (m.corner - m.ring_band / 2.0).max(0.0);
@@ -1162,7 +1166,7 @@ fn paint_ring(painter: &egui::Painter, rect: Rect, m: &Metrics, theme: &Theme, l
         }
         if i < lit || is_marker {
             // The bloom stays within the socket, so it never smears onto the desktop.
-            if i + 1 == lit {
+            if dressing && i + 1 == lit {
                 painter.circle_filled(centre, radius * 1.6, colour.gamma_multiply(f32::from(c.ring_bloom) / 255.0));
             }
             painter.circle_filled(centre, radius, colour);

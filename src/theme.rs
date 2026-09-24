@@ -151,12 +151,13 @@ impl Theme {
             c.open = c.text;
         }
         if let Some(dim) = night_dim.filter(|d| *d < 1.0) {
-            c.text = c.text.gamma_multiply(dim);
-            c.alert = c.alert.gamma_multiply(dim);
-            c.secondary = c.secondary.gamma_multiply(dim);
-            c.open = c.open.gamma_multiply(dim);
-            c.label = c.label.gamma_multiply(dim);
-            c.ring_marker = c.ring_marker.gamma_multiply(dim);
+            let fade = |color: Color32| fade(color, dim, chroma);
+            c.text = fade(c.text);
+            c.alert = fade(c.alert);
+            c.secondary = fade(c.secondary);
+            c.open = fade(c.open);
+            c.label = fade(c.label);
+            c.ring_marker = fade(c.ring_marker);
         }
         theme
     }
@@ -188,6 +189,19 @@ impl Theme {
     /// A caption or a closed board row over a backdrop.
     pub fn dim_caption(&self, color: Color32) -> Color32 {
         Self::dim(color, self.color.caption_dim)
+    }
+}
+
+/// `color` at `factor` of its strength: more transparent as a rule, but
+/// darker and still opaque over a chroma key, where anything translucent
+/// would show the key colour through and key out as a tint.
+pub fn fade(color: Color32, factor: f32, chroma: bool) -> Color32 {
+    if chroma {
+        let [r, g, b, a] = color.to_array();
+        let scale = |v: u8| (f32::from(v) * factor).round() as u8;
+        Color32::from_rgba_premultiplied(scale(r), scale(g), scale(b), a)
+    } else {
+        color.gamma_multiply(factor)
     }
 }
 
@@ -502,6 +516,17 @@ mod tests {
         assert_ne!(plain.color.open, plain.color.text);
         assert_eq!(keyed.color.open, keyed.color.text);
         assert_eq!(keyed.color.chroma, plain.color.chroma);
+    }
+
+    #[test]
+    fn under_chroma_night_mode_darkens_instead_of_fading() {
+        let keyed = Theme::resolve(Palette::Default, Some(0.7), true);
+        let base = Theme::resolve(Palette::Default, None, true);
+        for (dim, full) in [(keyed.color.text, base.color.text), (keyed.color.alert, base.color.alert), (keyed.color.label, base.color.label)] {
+            assert_eq!(dim.a(), 255, "opaque: nothing of the key colour shows through");
+            assert!(dim.r() < full.r() || dim.g() < full.g(), "{dim:?} is not darker than {full:?}");
+        }
+        assert_eq!(fade(Color32::from_rgb(200, 100, 50), 0.5, true), Color32::from_rgb(100, 50, 25));
     }
 
     #[test]

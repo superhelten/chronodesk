@@ -381,6 +381,8 @@ impl Tray {
         // An outline under a backdrop would be invisible anyway, and under a
         // chroma key it is switched off to keep the key colour clean.
         self.outline.set_enabled(!state.backdrop && !state.chroma);
+        // A backdrop is translucent, and keys out as a tint.
+        self.backdrop.set_enabled(!state.chroma);
         self.chroma.set_checked(state.chroma);
         self.seconds.set_checked(state.show_seconds);
         self.on_top.set_checked(state.always_on_top);

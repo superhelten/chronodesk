@@ -93,8 +93,9 @@ A few rules follow from that:
 - Dimming, whether for captions, closed markets or night mode, never takes text
   below 60% opacity.
 - Under a chroma key background nothing translucent is drawn (no halo, no ghost
-  segments, no LED sockets), because anything half transparent keys out as a
-  green tint.
+  segments, no LED sockets, no backdrop), because anything half transparent
+  keys out as a green tint. Night mode and a finished timer's blink darken the
+  text there instead of fading it.
 
 ## Market board
 
