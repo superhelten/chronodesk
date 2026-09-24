@@ -24,12 +24,15 @@ pub struct Saved {
 const ANCHOR_DRIFT_MS: u64 = 1000;
 
 impl Saved {
-    /// True when `current` describes the same run as `self`, but with an
-    /// anchor the wall clock has since moved away from: the clock was set
-    /// (a time sync, daylight saving done wrong, the user) while it ran.
+    /// True when `current` describes the same run as `self`, but the wall
+    /// clock has moved under it: the clock was set (a time sync, the user)
+    /// while it ran. Compared by when counting would have begun had it never
+    /// paused, which a restore does not change: it folds the time away into
+    /// what was counted and moves the start to now, by the same amount.
     pub fn drifted(self, current: Saved) -> bool {
-        match (self.started_at_ms, current.started_at_ms) {
-            (Some(saved), Some(now)) => self.accumulated_ms == current.accumulated_ms && saved.abs_diff(now) > ANCHOR_DRIFT_MS,
+        let origin = |s: Saved| s.started_at_ms.map(|at| i128::from(at) - i128::from(s.accumulated_ms));
+        match (origin(self), origin(current)) {
+            (Some(saved), Some(now)) => saved.abs_diff(now) > u128::from(ANCHOR_DRIFT_MS),
             _ => false,
         }
     }
@@ -470,6 +473,13 @@ mod tests {
             ms(60_000),
             "restored against the corrected clock, the minute is all there"
         );
+
+        // Carried over a restart: the restore folded the time away into what
+        // was counted, and that alone is no drift.
+        let (t1, wall1) = (t0 + ms(3_600_000), wall + ms(3_600_000));
+        let carried = Stopwatch::restore(saved, t1, wall1);
+        assert!(!saved.drifted(carried.save(t1, wall1).unwrap()));
+        assert!(saved.drifted(carried.save(t1, wall1 - ms(180_000)).unwrap()), "and a clock set after it still is");
     }
 
     #[test]

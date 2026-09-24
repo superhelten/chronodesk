@@ -163,6 +163,11 @@ pub struct ChronoApp {
     saved: Config,
     /// The last write failed; quitting tries once more.
     save_failed: bool,
+    /// When a failed write is tried once more. A scanner holding the file
+    /// for a moment should not cost a counter that was just started; a file
+    /// that stays unwritable gets this one retry and then waits for the next
+    /// change, so it cannot keep the overlay awake.
+    save_retry: Option<Instant>,
     config_path: Option<PathBuf>,
     /// Set when `settings` differs from `saved`; writes are delayed so dragging
     /// the window doesn't hit the disk on every frame.
@@ -220,6 +225,8 @@ pub struct ChronoApp {
 const AUTOSTART_RECHECK: Duration = Duration::from_secs(10);
 
 const SAVE_DELAY: Duration = Duration::from_millis(1500);
+/// How long after a failed write it is tried once more.
+const SAVE_RETRY: Duration = Duration::from_secs(5);
 
 impl ChronoApp {
     pub fn new(
@@ -302,6 +309,7 @@ impl ChronoApp {
             settings,
             config_path,
             save_failed: false,
+            save_retry: None,
             dirty_since: None,
             locked: false,
             stopwatch,
@@ -352,6 +360,15 @@ impl ChronoApp {
     /// Notes the current window position (`position`, physical pixels) and
     /// writes the config once it has been unchanged for [`SAVE_DELAY`].
     fn persist(&mut self, ctx: &egui::Context, now: Instant, position: Option<Pos2>) {
+        if let Some(at) = self.save_retry {
+            match at.checked_duration_since(now).filter(|left| !left.is_zero()) {
+                Some(left) => ctx.request_repaint_after(left + WAKE_SLACK),
+                None => {
+                    self.save_retry = None;
+                    self.write_config_once();
+                }
+            }
+        }
         // Until the placement check has run the window is wherever the OS put
         // it, and while a move of ours is in flight it still reports the old
         // position: recording either would undo the placement in the file.
@@ -376,6 +393,15 @@ impl ChronoApp {
     }
 
     fn write_config(&mut self) {
+        let now = Instant::now();
+        self.write_config_once();
+        if self.save_failed {
+            self.save_retry = Some(now + SAVE_RETRY);
+        }
+    }
+
+    /// One attempt, with no retry of its own.
+    fn write_config_once(&mut self) {
         self.dirty_since = None;
         self.saved = self.settings.clone();
         let Some(path) = &self.config_path else { return };
@@ -497,9 +523,10 @@ impl ChronoApp {
 
     /// Mirrors the two counters into the settings and writes them out at once:
     /// a logout or a power cut gives no notice, and the whole point is that a
-    /// running timer survives one. Called only after a command that touched a
-    /// counter, never per frame. That is enough, because a running counter is
-    /// saved as the moment it started, which does not change while it runs.
+    /// running timer survives one. Called after a command that touched a
+    /// counter, and when the wall clock was set under a running one; that is
+    /// enough, because a running counter is saved as the moment it started,
+    /// which does not change while it runs.
     fn save_counters(&mut self, now: Instant) {
         let wall = SystemTime::now();
         let counters = (self.stopwatch.save(now, wall), self.countdown.save(now, wall));
@@ -1529,6 +1556,29 @@ mod tests {
         eframe::App::on_exit(&mut app, None);
         let saved = config::load(&path).config;
         assert!(saved.backdrop && saved.chroma, "written on exit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file held for a moment (a scanner at logon) gets one more try a few
+    /// seconds later, without waiting for another change.
+    #[test]
+    fn a_failed_save_is_tried_once_more() {
+        let dir = std::env::temp_dir().join(format!("chronodesk_test_save_retry_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("app.ron");
+        std::fs::create_dir_all(&path).unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        app.config_path = Some(path.clone());
+        app.settings.backdrop = true;
+        app.write_config();
+        assert!(app.save_failed && app.save_retry.is_some());
+
+        std::fs::remove_dir(&path).unwrap();
+        app.persist(&ctx, Instant::now() + SAVE_RETRY + WAKE_SLACK, None);
+        assert!(!app.save_failed && app.save_retry.is_none());
+        assert!(config::load(&path).config.backdrop, "the retry wrote it");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
