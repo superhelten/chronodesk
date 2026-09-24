@@ -143,14 +143,20 @@ pub fn uninstall(layout: &Layout, config: Option<&Path>) -> io::Result<()> {
     if let Some(config) = config {
         quit_running(config);
     }
-    layout.autostart.remove_if_ours(&layout.exe())?;
+    // Every step is tried, whatever happened to the one before.
+    let steps = [
+        layout.autostart.remove_if_ours(&layout.exe()),
+        layout.shortcut.as_deref().map_or(Ok(()), remove_if_there),
+        remove_if_there(&layout.dir.join(ICON_NAME)),
+    ];
+    // Left by an upgrade while the exe it replaced was still running. Not worth
+    // failing over: the clean-up after exit takes whatever is still here.
+    let _ = remove_if_there(&layout.dir.join(NEW_NAME));
+    remove_leftovers(&layout.dir);
+    steps.into_iter().collect::<io::Result<()>>()?;
+    // Last, so that anything that could not be removed can still be
+    // uninstalled again from Settings.
     registry::delete_tree(&layout.uninstall_key);
-    if let Some(shortcut) = &layout.shortcut {
-        remove_if_there(shortcut)?;
-    }
-    for name in [ICON_NAME, OLD_NAME, NEW_NAME] {
-        remove_if_there(&layout.dir.join(name))?;
-    }
     Ok(())
 }
 
@@ -164,7 +170,6 @@ fn remove_if_there(path: &Path) -> io::Result<()> {
 /// Asks the overlay on `config` to exit and waits until its guard is free.
 /// False when it is still there afterwards: a build from before it listened.
 fn quit_running(config: &Path) -> bool {
-    signal::send(config, Signal::Quit);
     let deadline = Instant::now() + QUIT_TIMEOUT;
     loop {
         if instance::acquire(config).is_some() {
@@ -173,6 +178,9 @@ fn quit_running(config: &Path) -> bool {
         if Instant::now() >= deadline {
             return false;
         }
+        // Asked again each time: an overlay that is only just starting may
+        // hold its guard a moment before it can hear anything.
+        signal::send(config, Signal::Quit);
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -180,10 +188,16 @@ fn quit_running(config: &Path) -> bool {
 /// New exe in, old exe out of the way. At every point there is a complete
 /// `chronodesk.exe` or none, never half of one.
 fn replace_exe(source: &Path, dir: &Path) -> io::Result<()> {
-    let (target, old, new) = (dir.join(EXE_NAME), dir.join(OLD_NAME), dir.join(NEW_NAME));
+    let (target, new) = (dir.join(EXE_NAME), dir.join(NEW_NAME));
     fs::copy(source, &new)?;
-    // Left by the previous upgrade if that exe was still running then.
-    let _ = fs::remove_file(&old);
+    // Left by earlier upgrades if their exe was still running then. One that
+    // still is cannot be removed or replaced, so the exe steps aside to a name
+    // that is free.
+    remove_leftovers(dir);
+    let old = (1..)
+        .map(|n| if n == 1 { dir.join(OLD_NAME) } else { dir.join(format!("{OLD_NAME}{n}")) })
+        .find(|path| !path.exists())
+        .expect("a free name");
     if target.exists() {
         fs::rename(&target, &old)?;
     }
@@ -196,6 +210,25 @@ fn replace_exe(source: &Path, dir: &Path) -> io::Result<()> {
     // uninstaller picks it up.
     let _ = fs::remove_file(&old);
     Ok(())
+}
+
+/// The exes earlier upgrades moved aside: `chronodesk.exe.old`, and
+/// `chronodesk.exe.old2` and on when one of those was still running.
+fn leftovers(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut found: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(OLD_NAME))
+        .map(|entry| entry.path())
+        .collect();
+    found.sort();
+    found
+}
+
+fn remove_leftovers(dir: &Path) {
+    for path in leftovers(dir) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -260,7 +293,11 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
                 // or finds one running and asks it to show itself. Anything else
                 // on the command line was meant for it.
                 let passed_on = args.iter().filter(|arg| !matches!(arg.as_str(), "--install" | "--quiet"));
-                if let Err(err) = std::process::Command::new(layout.exe()).args(passed_on).spawn() {
+                // Started in its own folder: it runs for days, and would
+                // otherwise hold on to wherever the setup was run from, a USB
+                // stick or a Downloads folder the user wants to delete.
+                let started = std::process::Command::new(layout.exe()).args(passed_on).current_dir(&layout.dir).spawn();
+                if let Err(err) = started {
                     report(&format!("ChronoDesk was installed but could not be started: {err}"), true);
                     return 1;
                 }
@@ -280,7 +317,14 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
                 0
             }
             Err(err) => {
-                report(&format!("ChronoDesk could not be removed completely: {err}"), true);
+                report(
+                    &format!(
+                        "ChronoDesk could not be removed completely: {err}
+
+                         Close whatever is using it and uninstall it again from Settings."
+                    ),
+                    true,
+                );
                 1
             }
         },
@@ -297,15 +341,21 @@ fn remove_dir_after_exit(dir: &Path) {
     {
         use std::os::windows::process::CommandExt as _;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        let (exe, old) = (dir.join(EXE_NAME), dir.join(OLD_NAME));
+        let (exe, new) = (dir.join(EXE_NAME), dir.join(NEW_NAME));
+        let old = dir.join(format!("{OLD_NAME}*"));
         let script = format!(
             "/d /c (for /l %i in (1,1,30) do @if exist \"{exe}\" (del /f /q \"{exe}\" 2>nul & ping -n 2 127.0.0.1 >nul)) \
-             & del /f /q \"{old}\" 2>nul & rmdir \"{dir}\"",
+             & del /f /q \"{old}\" \"{new}\" 2>nul & rmdir \"{dir}\"",
             exe = exe.display(),
             old = old.display(),
+            new = new.display(),
             dir = dir.display(),
         );
-        let spawned = std::process::Command::new("cmd")
+        // By full path: a bare name is looked up next to this exe first, and
+        // the uninstaller may be run from a folder anyone could drop a cmd.exe in.
+        let cmd = std::env::var_os("SystemRoot")
+            .map_or_else(|| PathBuf::from("cmd.exe"), |root| PathBuf::from(root).join("System32").join("cmd.exe"));
+        let spawned = std::process::Command::new(cmd)
             .raw_arg(script)
             .current_dir(std::env::temp_dir())
             .creation_flags(CREATE_NO_WINDOW)
@@ -570,6 +620,69 @@ mod tests {
         drop(held);
         assert_eq!(install(&layout, &scratch.source("three.exe", b"version three"), None).unwrap(), Installed::Copied);
         assert!(!layout.dir.join(OLD_NAME).exists(), "the leftover goes with the next upgrade");
+    }
+
+    /// Open without sharing delete: what a leftover exe that is still running
+    /// looks like to anything that tries to remove or replace it.
+    #[cfg(windows)]
+    fn hold(path: &Path) -> fs::File {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ: u32 = 0x1;
+        fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path).unwrap()
+    }
+
+    /// An older overlay that ignored the quit keeps running as the `.old` exe;
+    /// the next upgrade must get past it rather than fail on it.
+    #[cfg(windows)]
+    #[test]
+    fn an_upgrade_gets_past_an_old_exe_that_is_still_running() {
+        let scratch = Scratch::new("stale_old");
+        let layout = scratch.layout();
+        install(&layout, &scratch.source("one.exe", b"version one"), None).unwrap();
+        fs::write(layout.dir.join(OLD_NAME), b"version zero, still running").unwrap();
+        let held = hold(&layout.dir.join(OLD_NAME));
+
+        assert_eq!(install(&layout, &scratch.source("two.exe", b"version two"), None).unwrap(), Installed::Copied);
+        assert_eq!(fs::read(layout.exe()).unwrap(), b"version two");
+        assert!(!layout.dir.join(NEW_NAME).exists());
+
+        drop(held);
+        install(&layout, &scratch.source("three.exe", b"version three"), None).unwrap();
+        assert_eq!(leftovers(&layout.dir), Vec::<PathBuf>::new(), "all of them go once they can");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn uninstall_is_not_stopped_by_an_old_exe_that_is_still_running() {
+        let scratch = Scratch::new("uninstall_stale");
+        let layout = scratch.layout();
+        install(&layout, &scratch.source("setup.exe", b"app"), None).unwrap();
+        fs::write(layout.dir.join(OLD_NAME), b"still running").unwrap();
+        let _held = hold(&layout.dir.join(OLD_NAME));
+
+        uninstall(&layout, None).unwrap();
+        assert!(registry::read_string(&layout.uninstall_key, "DisplayName").is_none());
+        assert!(!layout.shortcut.as_ref().unwrap().exists());
+    }
+
+    /// If something could not be removed, the entry in Settings stays, so the
+    /// uninstall can be run again instead of leaving files nothing points to.
+    #[cfg(windows)]
+    #[test]
+    fn an_uninstall_that_fails_keeps_its_entry_and_does_the_rest() {
+        let scratch = Scratch::new("uninstall_fail");
+        let layout = scratch.layout();
+        install(&layout, &scratch.source("setup.exe", b"app"), None).unwrap();
+        let shortcut = layout.shortcut.clone().unwrap();
+        let held = hold(&shortcut);
+
+        assert!(uninstall(&layout, None).is_err());
+        assert_eq!(registry::read_string(&layout.uninstall_key, "DisplayName").as_deref(), Some("ChronoDesk"));
+        assert!(!layout.dir.join(ICON_NAME).exists(), "what could go, went");
+
+        drop(held);
+        uninstall(&layout, None).unwrap();
+        assert!(registry::read_string(&layout.uninstall_key, "DisplayName").is_none());
     }
 
     #[cfg(windows)]

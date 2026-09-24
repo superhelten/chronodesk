@@ -52,6 +52,9 @@ fn main() -> eframe::Result {
         }
         guard => guard.flatten(),
     };
+    // Right after the guard, so a launch or installer that finds it held can
+    // already be heard while the window is still being built.
+    let inbox = config_path.as_deref().and_then(signal::Inbox::open);
 
     let icon = icon::app_icon(64, false);
     // Loaded before the window exists so the saved position can be applied up
@@ -79,11 +82,10 @@ fn main() -> eframe::Result {
         .with_transparent(true)
         .with_decorations(false)
         .with_resizable(false)
-        // Not a courtesy but a lifeline: a minimised window is not drawn at all
-        // (no ticks, no chime), and with no taskbar button there is nothing to
-        // click to get it back. Without the style bit the system's own
-        // minimise commands do not apply to it; a second launch restores it
-        // if something minimised it anyway.
+        // Not a courtesy but a lifeline: with no taskbar button there would be
+        // nothing to click to get a minimised overlay back. Without the style
+        // bit the system's own minimise commands do not apply to it; a second
+        // launch restores it if something minimised it anyway.
         .with_minimize_button(false)
         .with_active(!scripted)
         .with_always_on_top()
@@ -96,6 +98,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "ChronoDesk",
         options,
-        Box::new(move |cc| Ok(Box::new(app::ChronoApp::new(cc, loaded)?))),
+        Box::new(move |cc| Ok(Box::new(app::ChronoApp::new(cc, loaded, inbox)?))),
     )
 }

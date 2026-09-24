@@ -224,6 +224,7 @@ impl ChronoApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         loaded: config::Loaded,
+        inbox: Option<signal::Inbox>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         for warning in &loaded.warnings {
             eprintln!("ChronoDesk: config: {warning}");
@@ -241,12 +242,12 @@ impl ChronoApp {
         // read. This session's defaults must not be written over it.
         let writable_path = config_path.clone().filter(|_| !loaded.unreadable);
         let (tx, signals) = mpsc::channel();
-        if let Some(path) = &config_path {
+        if let Some(inbox) = inbox {
             let ctx = cc.egui_ctx.clone();
             let window = native_window(cc);
-            signal::listen(path, move |signal| {
-                // A minimised window draws no frames, so nothing sent to the
-                // app would be looked at: it is brought back from here first.
+            inbox.listen(move |signal| {
+                // Someone is looking for the overlay, and a minimised one is
+                // nowhere to be seen: it is brought back from here first.
                 if signal == Signal::Show {
                     restore_if_minimised(window);
                 }

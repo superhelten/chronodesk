@@ -129,9 +129,11 @@ the name depends on the path, test instances with their own `CHRONODESK_CONFIG`
 can run next to the user's overlay.
 
 The running copy listens on two named events, *show* and *quit*, on a thread of
-its own. The installer uses *quit* before replacing the exe. A minimised window
-draws no frames and would never see the message, so the listener restores it
-before passing the message on.
+its own. The installer uses *quit* before replacing the exe. The events are
+created right after the mutex is taken, while the window is still being built,
+and an event stays set until it is waited on, so a signal sent in that gap is
+delivered once the listener starts. On *show* the listener also restores a
+minimised window, since whoever asked is looking for it.
 
 ## Start with Windows
 
@@ -148,7 +150,13 @@ with `--install`, it copies itself to `%LOCALAPPDATA%\ChronoDesk`, creates a
 Start menu shortcut and an *Installed apps* entry, and starts the installed copy.
 Everything is per user, so nothing asks for administrator rights. A running exe
 cannot be overwritten but can be renamed, so an upgrade copies the new file
-alongside, renames the old one out of the way and the new one into place.
+alongside, renames the old one out of the way and the new one into place. An
+old exe that is still running cannot be removed either, so the next one moves
+aside to `chronodesk.exe.old2` and so on, and every upgrade and uninstall
+clears whatever of those can go.
+
+Uninstalling tries every step even when one fails, and removes the
+*Installed apps* entry last, so anything left behind can be uninstalled again.
 
 There is no separate installer project that could drift out of step with the
 app, and no extra toolchain.
