@@ -13,7 +13,7 @@ $repo = Split-Path (Split-Path $MyInvocation.MyCommand.Path)
 $dist = Join-Path $repo 'dist'
 $setup = Join-Path $dist 'ChronoDesk-Setup.exe'
 
-cargo build --release --manifest-path (Join-Path $repo 'Cargo.toml') --target-dir (Join-Path $repo 'target\dist')
+cargo build --release --locked --manifest-path (Join-Path $repo 'Cargo.toml') --target-dir (Join-Path $repo 'target\dist')
 if ($LASTEXITCODE -ne 0) { throw "the release build failed" }
 
 New-Item -ItemType Directory -Force $dist | Out-Null
