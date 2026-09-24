@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::autostart::Autostart;
 use crate::board;
 use crate::chime;
-use crate::clock::{ClockStyle, clock_readout};
+use crate::clock::{ClockFormat, ClockStyle, clock_readout};
 use crate::ring;
 use crate::config::{self, Config};
 use crate::digital;
@@ -182,6 +182,7 @@ pub struct ChronoApp {
     layout: DerivedLayout,
     /// Last size requested from the OS, to avoid resize commands every frame.
     window_size: Option<Vec2>,
+    line_width: WidthFloor<LineShape>,
     window_styled: bool,
     /// The position as it came out of `app.ron`, kept apart from `settings`
     /// because `persist` overwrites that one with wherever the window actually is.
@@ -311,6 +312,7 @@ impl ChronoApp {
             layout: DerivedLayout::new(&Theme::default()),
             theme: Theme::default(),
             window_size: None,
+            line_width: WidthFloor::default(),
             window_styled: false,
             wheel: 0.0,
             autostart,
@@ -945,7 +947,27 @@ impl eframe::App for ChronoApp {
         // The seconds ring runs just inside the window edge, so the content
         // moves in by the band it needs.
         let inset = if readout.ring.is_some() { m.ring_band } else { 0.0 };
-        let content = vec2(scene_size.x.max(caption_width), scene_size.y + caption_height);
+        let mut content_width = scene_size.x.max(caption_width);
+        if let Scene::Line { main, .. } = &readout.scene {
+            // 12-hour time has one hour digit until ten and two from ten to
+            // one: measured with the second one, the window is as wide at
+            // 9:59 as at 10:00 and does not grow past a screen edge.
+            let glyphs = self.layout.glyphs();
+            if s.mode == Mode::Clock && s.clock_format == ClockFormat::H12 && main.find(':') == Some(1) {
+                let digit = ('0'..='9').map(|d| glyphs.cell_width(d)).fold(0.0, f32::max);
+                content_width = content_width.max(glyphs.width_of(main) + digit);
+            }
+            let shape = LineShape {
+                layout: key,
+                mode: s.mode,
+                clock_format: s.clock_format,
+                show_seconds: s.show_seconds,
+                show_date: s.show_date,
+                timer_minutes: s.timer_minutes,
+            };
+            content_width = self.line_width.hold(shape, content_width);
+        }
+        let content = vec2(content_width, scene_size.y + caption_height);
         let window_size = (content + (m.pad + Vec2::splat(inset)) * 2.0).ceil();
         self.fit_window(&ctx, window_size);
 
@@ -1330,6 +1352,44 @@ fn strip_window_chrome(frame: &eframe::Frame) {
 #[cfg(not(windows))]
 fn strip_window_chrome(_frame: &eframe::Frame) {}
 
+/// What decides the width a one-line readout needs: while none of it
+/// changes, neither may the window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LineShape {
+    layout: LayoutKey,
+    mode: Mode,
+    clock_format: ClockFormat,
+    show_seconds: bool,
+    show_date: bool,
+    timer_minutes: u64,
+}
+
+/// The widest a readout has been since its shape last changed. The text on
+/// one line comes and goes in width (a timer's "TIMER · 25 MIN" becomes
+/// "TIMER" when it starts, a stopwatch says "PAUSED", the date is longer on
+/// some days), and a window that followed it would shrink and grow under
+/// the user, with the digits jumping sideways each time.
+struct WidthFloor<K> {
+    key: Option<K>,
+    width: f32,
+}
+
+impl<K> Default for WidthFloor<K> {
+    fn default() -> Self {
+        Self { key: None, width: 0.0 }
+    }
+}
+
+impl<K: PartialEq> WidthFloor<K> {
+    fn hold(&mut self, key: K, width: f32) -> f32 {
+        if self.key.as_ref() != Some(&key) {
+            (self.key, self.width) = (Some(key), 0.0);
+        }
+        self.width = self.width.max(width);
+        self.width
+    }
+}
+
 /// Where `app.ron` puts the overlay.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SavedPosition {
@@ -1500,6 +1560,15 @@ mod tests {
         let raw = egui::RawInput { events: vec![space(true)], ..Default::default() };
         ctx.run_ui(raw, |ui| commands = app.keyboard_commands(ui.ctx())).textures_delta.clear();
         assert_eq!(commands, vec![], "still held");
+    }
+
+    #[test]
+    fn a_line_keeps_its_widest_width_until_its_shape_changes() {
+        let mut floor = WidthFloor::default();
+        assert_eq!(floor.hold("timer 25", 92.0), 92.0, "TIMER · 25 MIN");
+        assert_eq!(floor.hold("timer 25", 66.0), 92.0, "started: the caption is shorter, the window is not");
+        assert_eq!(floor.hold("timer 25", 100.0), 100.0);
+        assert_eq!(floor.hold("timer 30", 70.0), 70.0, "a new duration is measured afresh");
     }
 
     #[test]
