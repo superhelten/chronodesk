@@ -508,6 +508,26 @@ impl ChronoApp {
         }
     }
 
+    /// A running counter is saved as the wall-clock moment it started, which
+    /// only adds up as long as nobody sets the clock. When somebody has (a
+    /// time sync, by hand), what was saved would come back after a restart
+    /// off by the correction, so it is saved again. Cheap enough per frame:
+    /// one clock read and a comparison while something runs, nothing else.
+    fn follow_clock_changes(&mut self, now: Instant) {
+        if !self.stopwatch.is_running() && !self.countdown.is_running(now) {
+            return;
+        }
+        let wall = SystemTime::now();
+        let moved = |saved: Option<timer::Saved>, current: Option<timer::Saved>| {
+            saved.zip(current).is_some_and(|(saved, current)| saved.drifted(current))
+        };
+        if moved(self.settings.stopwatch, self.stopwatch.save(now, wall))
+            || moved(self.settings.countdown, self.countdown.save(now, wall))
+        {
+            self.save_counters(now);
+        }
+    }
+
     /// The card has done its job the moment the user does anything at all, and
     /// that is written down at once so it is never shown twice.
     fn dismiss_welcome(&mut self) {
@@ -1071,6 +1091,7 @@ impl eframe::App for ChronoApp {
         }
 
         self.recheck_autostart(now);
+        self.follow_clock_changes(now);
         let state = self.menu_state(now);
         self.tray.sync(state);
         self.persist(&ctx, now, window_position_px(&ctx, frame));

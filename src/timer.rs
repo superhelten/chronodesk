@@ -18,6 +18,23 @@ pub struct Saved {
     pub started_at_ms: Option<u64>,
 }
 
+/// How far a running counter's anchor may wander before it is written again.
+/// Recomputing it jitters by a millisecond or so; a clock that was set moves
+/// it by seconds or more.
+const ANCHOR_DRIFT_MS: u64 = 1000;
+
+impl Saved {
+    /// True when `current` describes the same run as `self`, but with an
+    /// anchor the wall clock has since moved away from: the clock was set
+    /// (a time sync, daylight saving done wrong, the user) while it ran.
+    pub fn drifted(self, current: Saved) -> bool {
+        match (self.started_at_ms, current.started_at_ms) {
+            (Some(saved), Some(now)) => self.accumulated_ms == current.accumulated_ms && saved.abs_diff(now) > ANCHOR_DRIFT_MS,
+            _ => false,
+        }
+    }
+}
+
 fn epoch_ms(wall: SystemTime) -> u64 {
     wall.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis().min(u128::from(u64::MAX)) as u64)
 }
@@ -433,6 +450,26 @@ mod tests {
         assert!(!cd.is_running(t0 + ms(3000)));
         assert_eq!(cd.remaining(t0 + ms(5000)), Duration::ZERO);
         assert_eq!(cd.overtime(t0 + ms(5000)), Some(ms(2000)));
+    }
+
+    /// A time sync sets the clock back three minutes while the stopwatch
+    /// runs: the anchor saved at start no longer adds up to what is shown.
+    #[test]
+    fn a_clock_that_was_set_moves_the_anchor_and_jitter_does_not() {
+        let (t0, wall) = (Instant::now(), SystemTime::now());
+        let mut sw = Stopwatch::default();
+        sw.toggle(t0);
+        let saved = sw.save(t0, wall).unwrap();
+        let later = t0 + ms(60_000);
+        let jitter = sw.save(later, wall + ms(60_002)).unwrap();
+        assert!(!saved.drifted(jitter));
+        let set_back = sw.save(later, wall + ms(60_000) - ms(180_000)).unwrap();
+        assert!(saved.drifted(set_back));
+        assert_eq!(
+            Stopwatch::restore(set_back, later, wall - ms(120_000)).elapsed(later),
+            ms(60_000),
+            "restored against the corrected clock, the minute is all there"
+        );
     }
 
     #[test]
