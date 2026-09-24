@@ -56,12 +56,12 @@ Right-click the overlay or the tray icon to open the menu. Everything can be set
 | Move | Drag with the left mouse button |
 | Lock (click-through) | Left-click the tray icon. The icon turns amber while locked, and a second click unlocks |
 | Switch mode | Menu, or `1` Clock, `2` Stopwatch, `3` Timer, `4` Markets |
-| Start/pause, reset | Hover the stopwatch or timer, or press `Space` / `R` while the overlay has focus |
+| Start/pause, reset | Hover the stopwatch or timer, or click the overlay and press `Space` / `R` |
 | Timer duration | Menu → *Timer duration*, or scroll over a stopped timer |
 | Start with Windows | Menu → *Start with Windows* |
 
 When a countdown finishes, the digits blink for half a minute and the Windows notification sound
-plays three times. A running stopwatch or timer carries on after a restart or a reboot.
+plays three times; *Restart* runs it again from the top. A running stopwatch or timer carries on after a restart or a reboot.
 
 Under *Appearance* you can change the size, the face (typeface, seven-segment or dot matrix), the
 colours, the 12/24-hour format, the date line, the seconds ring and night mode, which dims the
