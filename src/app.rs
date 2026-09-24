@@ -366,10 +366,11 @@ impl ChronoApp {
             self.dirty_since = Some(now);
         }
         if let Some(since) = self.dirty_since {
-            if now.duration_since(since) >= SAVE_DELAY {
-                self.write_config();
-            } else {
-                ctx.request_repaint_after(SAVE_DELAY);
+            match SAVE_DELAY.checked_sub(now.duration_since(since)).filter(|left| !left.is_zero()) {
+                None => self.write_config(),
+                // What is left of the delay, not all of it again, and past it
+                // by the slack a timed wake-up needs to not land just short.
+                Some(left) => ctx.request_repaint_after(left + WAKE_SLACK),
             }
         }
     }
@@ -543,8 +544,13 @@ impl ChronoApp {
     /// Another launch found this one running. An overlay has no taskbar button
     /// to flash, so it takes the focus, wears an outline for a few seconds, and
     /// has its position checked again, which brings it back if the screen it
-    /// was on has gone.
+    /// was on has gone. A locked overlay is unlocked, as it would be after a
+    /// restart: whoever launched it is looking for it, and wants to grab it.
     fn surface(&mut self, ctx: &egui::Context, now: Instant) {
+        if self.locked {
+            self.locked = false;
+            ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(false));
+        }
         // Not for a script's overlay: the focus belongs to whoever is at the
         // keyboard, and pulling it would drop them out of a full-screen game.
         if !self.instrument.active() {
@@ -1355,13 +1361,15 @@ fn restore_if_minimised(window: isize) {
         #[link(name = "user32")]
         unsafe extern "system" {
             fn IsIconic(window: isize) -> i32;
-            fn ShowWindow(window: isize, command: i32) -> i32;
+            fn ShowWindowAsync(window: isize, command: i32) -> i32;
         }
         const SW_RESTORE: i32 = 9;
         // SAFETY: both take a window handle by value and tolerate a stale one.
         unsafe {
             if IsIconic(window) != 0 {
-                ShowWindow(window, SW_RESTORE);
+                // Async: this runs on the listener's thread, and the window's
+                // own thread may be busy; posting does not wait for it.
+                ShowWindowAsync(window, SW_RESTORE);
             }
         }
     }
@@ -1601,6 +1609,16 @@ mod tests {
         assert_eq!(floor.hold("timer 25", 66.0), 92.0, "started: the caption is shorter, the window is not");
         assert_eq!(floor.hold("timer 25", 100.0), 100.0);
         assert_eq!(floor.hold("timer 30", 70.0), 70.0, "a new duration is measured afresh");
+    }
+
+    #[test]
+    fn a_second_launch_unlocks_a_locked_overlay() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        app.locked = true;
+        app.surface(&ctx, Instant::now());
+        assert!(!app.locked);
+        assert!(app.attention.is_some());
     }
 
     #[test]
