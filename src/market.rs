@@ -344,7 +344,9 @@ fn period(t: NaiveTime) -> &'static str {
 /// `2H 14M`, `42M`, or `1D 9H` from a day out; rounded up so `1M` is shown
 /// right until the event and the status flips as it reaches zero.
 pub fn countdown(wait: Duration) -> String {
-    let minutes = wait.as_secs().div_ceil(60).max(1);
+    // Rounded from the milliseconds: whole seconds would round down first,
+    // and with 60.5 s to go the board would already say 1M.
+    let minutes = (wait.as_millis().div_ceil(60_000) as u64).max(1);
     let (days, hours, mins) = (minutes / 1440, (minutes % 1440) / 60, minutes % 60);
     match (days, hours, mins) {
         (0, 0, m) => format!("{m}M"),
@@ -462,6 +464,8 @@ mod tests {
         assert_eq!(countdown(Duration::ZERO), "1M");
         assert_eq!(countdown(Duration::from_secs(42 * 60)), "42M");
         assert_eq!(countdown(Duration::from_secs(41 * 60 + 1)), "42M");
+        assert_eq!(countdown(Duration::from_millis(60_500)), "2M", "a minute and a bit is not 1M yet");
+        assert_eq!(countdown(Duration::from_millis(60_000)), "1M");
         assert_eq!(countdown(Duration::from_secs(2 * 3600)), "2H");
         assert_eq!(countdown(Duration::from_secs(2 * 3600 + 14 * 60)), "2H 14M");
         assert_eq!(countdown(Duration::from_secs(24 * 3600)), "1D");
