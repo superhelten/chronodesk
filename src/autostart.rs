@@ -184,7 +184,7 @@ mod tests {
     #[cfg(windows)]
     impl Drop for Scratch {
         fn drop(&mut self) {
-            registry::delete_tree(&self.0);
+            let _ = registry::delete_tree(&self.0);
         }
     }
 

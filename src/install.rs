@@ -18,7 +18,8 @@
 //! Running the setup again is safe at any time. With the same version installed
 //! nothing is copied and the running overlay is simply asked to show itself;
 //! with another version the running overlay is asked to quit, the exe is
-//! replaced and the new one started. A running exe cannot be overwritten on
+//! replaced and the new one started; run with `--quiet` while the overlay is
+//! closed, it leaves it closed. A running exe cannot be overwritten on
 //! Windows but it can be renamed, so the old one is moved aside first and the
 //! swap works even if some other copy of it is still running.
 //!
@@ -156,8 +157,7 @@ pub fn uninstall(layout: &Layout, config: Option<&Path>) -> io::Result<()> {
     steps.into_iter().collect::<io::Result<()>>()?;
     // Last, so that anything that could not be removed can still be
     // uninstalled again from Settings.
-    registry::delete_tree(&layout.uninstall_key);
-    Ok(())
+    registry::delete_tree(&layout.uninstall_key)
 }
 
 fn remove_if_there(path: &Path) -> io::Result<()> {
@@ -583,7 +583,7 @@ mod tests {
     #[cfg(windows)]
     impl Drop for Scratch {
         fn drop(&mut self) {
-            registry::delete_tree(&self.key);
+            let _ = registry::delete_tree(&self.key);
             let _ = fs::remove_dir_all(&self.root);
         }
     }

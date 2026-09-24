@@ -123,13 +123,20 @@ mod imp {
     }
 
     /// The key and everything under it; a key that is not there is a success.
-    pub fn delete_tree(key: &str) {
-        use windows_sys::Win32::System::Registry::RegDeleteTreeW;
+    pub fn delete_tree(key: &str) -> io::Result<()> {
+        use windows_sys::Win32::System::Registry::{RegDeleteKeyW, RegDeleteTreeW};
         let key = wide(key);
         // SAFETY: the string is NUL-terminated and outlives the calls.
-        unsafe {
-            RegDeleteTreeW(HKEY_CURRENT_USER, key.as_ptr());
-            windows_sys::Win32::System::Registry::RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr());
+        // `RegDeleteTreeW` empties the key; the key itself goes with the second.
+        let status = unsafe {
+            match RegDeleteTreeW(HKEY_CURRENT_USER, key.as_ptr()) {
+                ERROR_SUCCESS => RegDeleteKeyW(HKEY_CURRENT_USER, key.as_ptr()),
+                other => other,
+            }
+        };
+        match status {
+            ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
+            other => Err(io::Error::from_raw_os_error(other as i32)),
         }
     }
 }
@@ -158,7 +165,9 @@ mod imp {
         Err(io::ErrorKind::Unsupported.into())
     }
 
-    pub fn delete_tree(_key: &str) {}
+    pub fn delete_tree(_key: &str) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 pub use imp::*;
