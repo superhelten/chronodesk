@@ -447,8 +447,14 @@ fn markets_field(fields: &mut HashMap<String, Value>, out: &mut Vec<Market>, war
     *out = markets;
 }
 
+/// Copies the file aside under the first free name, `app.ron.bak` and then
+/// `app.ron.2.bak` and on: a second bad file must not take the first one's
+/// place, since that may be the one holding the settings worth saving.
 fn quarantine(path: &Path, warnings: &mut Vec<String>) -> Option<PathBuf> {
-    let backup = path.with_extension("ron.bak");
+    let backup = (1..)
+        .map(|n| if n == 1 { path.with_extension("ron.bak") } else { path.with_extension(format!("ron.{n}.bak")) })
+        .find(|candidate| !candidate.exists())
+        .expect("a free name");
     match fs::copy(path, &backup) {
         Ok(_) => {
             warnings.push(format!("previous file kept as {}", backup.display()));
@@ -999,6 +1005,12 @@ mod tests {
         let backup = loaded.quarantined.expect("corrupt file should be kept");
         assert_eq!(backup, path.with_extension("ron.bak"));
         assert_eq!(fs::read_to_string(&backup).unwrap(), "(schema_version:1, mode:\"clo");
+
+        write(&path, "also broken");
+        let second = load(&path).quarantined.expect("kept as well");
+        assert_eq!(second, path.with_extension("ron.2.bak"));
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "(schema_version:1, mode:\"clo", "the first copy survives");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "also broken");
     }
 
     #[test]
