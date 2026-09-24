@@ -8,7 +8,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use chrono::{NaiveTime, Timelike as _};
+use chrono::{DateTime, LocalResult, NaiveTime, TimeZone, Timelike as _};
 use serde::{Deserialize, Serialize};
 
 use crate::app::serde_by_id;
@@ -109,7 +109,30 @@ impl Schedule {
         }
     }
 
-    /// Time until `active` next changes, or `None` when it never will.
+    /// Real time until `active` next changes in `now`'s time zone, or `None`
+    /// when it never will. Counted on the wall clock alone, the wait is an
+    /// hour too long across the night the clocks go forward, and an app that
+    /// has nothing else to draw would sleep through the boundary.
+    pub fn until_boundary_in<Tz: TimeZone>(self, now: &DateTime<Tz>) -> Option<Duration> {
+        let wall = self.until_boundary(now.time())?;
+        let target = now.naive_local() + chrono::Duration::from_std(wall).ok()?;
+        let tz = now.timezone();
+        let at = match tz.from_local_datetime(&target) {
+            LocalResult::Single(at) => Some(at),
+            // An hour the clocks go back through is shown twice; the boundary
+            // is the first showing still ahead.
+            LocalResult::Ambiguous(first, second) => Some(if first > *now { first } else { second }),
+            // An hour the clocks skip is never shown: the boundary took effect
+            // as the clock jumped past it, which is the first minute that exists.
+            LocalResult::None => {
+                (1..=180).find_map(|m| tz.from_local_datetime(&(target + chrono::Duration::minutes(m))).earliest())
+            }
+        };
+        let real = at.and_then(|at| (at - now.clone()).to_std().ok()).filter(|d| !d.is_zero());
+        Some(real.unwrap_or(wall))
+    }
+
+    /// Wall-clock time until `active` next changes, or `None` when it never will.
     pub fn until_boundary(self, now: NaiveTime) -> Option<Duration> {
         const DAY: u64 = 24 * 3600 * 1_000_000_000;
         if self.from == self.to {
@@ -135,11 +158,16 @@ impl Schedule {
 
 /// What night mode does at `now`: the dim factor to apply, if any, and how
 /// long until that answer may change (only `Auto` ever needs a wake-up).
-pub fn resolve(mode: NightMode, schedule: Schedule, dim: f32, now: NaiveTime) -> (Option<f32>, Option<Duration>) {
+pub fn resolve<Tz: TimeZone>(
+    mode: NightMode,
+    schedule: Schedule,
+    dim: f32,
+    now: &DateTime<Tz>,
+) -> (Option<f32>, Option<Duration>) {
     match mode {
         NightMode::Off => (None, None),
         NightMode::On => (Some(dim), None),
-        NightMode::Auto => (schedule.active(now).then_some(dim), schedule.until_boundary(now)),
+        NightMode::Auto => (schedule.active(now.time()).then_some(dim), schedule.until_boundary_in(now)),
     }
 }
 
@@ -157,6 +185,76 @@ mod tests {
 
     fn night() -> Schedule {
         Schedule { from: t("22:00"), to: t("07:00") }
+    }
+
+    fn utc(h: u32, m: u32, s: u32) -> DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 9, 16, h, m, s).unwrap()
+    }
+
+    /// Central European time for 2026, enough to cross both changes:
+    /// summer time from 29 March to 25 October, at 01:00 UTC.
+    #[derive(Debug, Clone, Copy)]
+    struct Cet;
+
+    impl TimeZone for Cet {
+        type Offset = chrono::FixedOffset;
+
+        fn from_offset(_: &Self::Offset) -> Self {
+            Cet
+        }
+
+        fn offset_from_local_date(&self, _: &chrono::NaiveDate) -> LocalResult<Self::Offset> {
+            unimplemented!("not needed here")
+        }
+
+        fn offset_from_local_datetime(&self, local: &chrono::NaiveDateTime) -> LocalResult<Self::Offset> {
+            // Summer time first: the same wall time is earlier under it.
+            let fits: Vec<_> = [2, 1]
+                .map(|h| chrono::FixedOffset::east_opt(h * 3600).unwrap())
+                .into_iter()
+                .filter(|offset| self.offset_from_utc_datetime(&(*local - *offset)) == *offset)
+                .collect();
+            match fits[..] {
+                [] => LocalResult::None,
+                [one] => LocalResult::Single(one),
+                [first, second] => LocalResult::Ambiguous(first, second),
+                _ => unreachable!(),
+            }
+        }
+
+        fn offset_from_utc_date(&self, _: &chrono::NaiveDate) -> Self::Offset {
+            unimplemented!("not needed here")
+        }
+
+        fn offset_from_utc_datetime(&self, utc: &chrono::NaiveDateTime) -> Self::Offset {
+            let at = |m, d| chrono::NaiveDate::from_ymd_opt(2026, m, d).unwrap().and_hms_opt(1, 0, 0).unwrap();
+            let summer = (at(3, 29)..at(10, 25)).contains(utc);
+            chrono::FixedOffset::east_opt(if summer { 7200 } else { 3600 }).unwrap()
+        }
+    }
+
+    fn cet(m: u32, d: u32, h: u32, min: u32) -> DateTime<Cet> {
+        Cet.with_ymd_and_hms(2026, m, d, h, min, 0).earliest().unwrap()
+    }
+
+    /// 23:00 on the night the clocks go forward: 07:00 is eight hours away
+    /// on the clock face but seven in real time.
+    #[test]
+    fn the_wait_is_real_time_across_the_night_the_clocks_go_forward() {
+        assert_eq!(night().until_boundary_in(&cet(3, 28, 23, 0)), Some(Duration::from_secs(7 * 3600)));
+        assert_eq!(night().until_boundary_in(&cet(10, 24, 23, 0)), Some(Duration::from_secs(9 * 3600)), "and back");
+        assert_eq!(night().until_boundary_in(&cet(9, 16, 23, 0)), Some(Duration::from_secs(8 * 3600)), "any other night");
+    }
+
+    /// A boundary inside the hour that is skipped takes effect when the
+    /// clock jumps over it; one inside the hour that repeats, the first time.
+    #[test]
+    fn a_boundary_in_the_hour_that_changes_is_met_when_the_clock_gets_there() {
+        let at_2_30 = Schedule { from: t("22:00"), to: t("02:30") };
+        // Forward: 02:00 CET becomes 03:00 CEST, an hour after 01:00 CET.
+        assert_eq!(at_2_30.until_boundary_in(&cet(3, 29, 1, 0)), Some(Duration::from_secs(3600)));
+        // Back: 02:30 is shown first at 00:30 UTC, 90 minutes after 01:00 CEST.
+        assert_eq!(at_2_30.until_boundary_in(&cet(10, 25, 1, 0)), Some(Duration::from_secs(90 * 60)));
     }
 
     #[test]
@@ -235,18 +333,18 @@ mod tests {
 
     #[test]
     fn off_neither_dims_nor_wakes() {
-        assert_eq!(resolve(NightMode::Off, night(), 0.7, at(23, 0, 0)), (None, None));
+        assert_eq!(resolve(NightMode::Off, night(), 0.7, &utc(23, 0, 0)), (None, None));
     }
 
     #[test]
     fn on_dims_at_any_hour_without_waking() {
-        assert_eq!(resolve(NightMode::On, night(), 0.7, at(12, 0, 0)), (Some(0.7), None));
+        assert_eq!(resolve(NightMode::On, night(), 0.7, &utc(12, 0, 0)), (Some(0.7), None));
     }
 
     #[test]
     fn auto_follows_the_schedule_and_wakes_at_the_next_boundary() {
-        assert_eq!(resolve(NightMode::Auto, night(), 0.7, at(23, 0, 0)), (Some(0.7), Some(Duration::from_secs(8 * 3600))));
-        assert_eq!(resolve(NightMode::Auto, night(), 0.7, at(21, 0, 0)), (None, Some(Duration::from_secs(3600))));
+        assert_eq!(resolve(NightMode::Auto, night(), 0.7, &utc(23, 0, 0)), (Some(0.7), Some(Duration::from_secs(8 * 3600))));
+        assert_eq!(resolve(NightMode::Auto, night(), 0.7, &utc(21, 0, 0)), (None, Some(Duration::from_secs(3600))));
     }
 
     #[test]

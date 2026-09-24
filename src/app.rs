@@ -706,7 +706,7 @@ impl ChronoApp {
     fn apply_night(&mut self, local: DateTime<Local>) -> Option<Duration> {
         let s = &self.settings;
         let schedule = Schedule { from: s.night_from, to: s.night_to };
-        let (dim, wake) = night::resolve(s.night, schedule, s.night_dim, local.time());
+        let (dim, wake) = night::resolve(s.night, schedule, s.night_dim, &local);
         self.theme = Theme::resolve(s.palette, dim, s.chroma);
         wake
     }
