@@ -171,7 +171,7 @@ pub struct ChronoApp {
     stopwatch: Stopwatch,
     countdown: Countdown,
     alarm: Alarm,
-    /// Chimes actually played, for the instrumentation.
+    /// Chimes due, for the instrumentation; played unless a script runs this.
     chimes: u32,
     tray: Tray,
     instrument: Instrument,
@@ -286,7 +286,7 @@ impl ChronoApp {
 
         let autostart = Autostart::system();
         let autostart_on = (exe.as_deref().is_some_and(|exe| autostart.enabled(exe)), Instant::now());
-        if !settings.always_on_top {
+        if !settings.always_on_top && !instrument.active() {
             ctx.send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::Normal));
         }
 
@@ -525,7 +525,11 @@ impl ChronoApp {
     /// has its position checked again, which brings it back if the screen it
     /// was on has gone.
     fn surface(&mut self, ctx: &egui::Context, now: Instant) {
-        ctx.send_viewport_cmd(ViewportCommand::Focus);
+        // Not for a script's overlay: the focus belongs to whoever is at the
+        // keyboard, and pulling it would drop them out of a full-screen game.
+        if !self.instrument.active() {
+            ctx.send_viewport_cmd(ViewportCommand::Focus);
+        }
         self.attention = Some(now);
         self.saved_position = SavedPosition::of(&self.settings);
         self.placement_pending = Some(PLACEMENT_DEFERRALS);
@@ -578,7 +582,10 @@ impl ChronoApp {
             Command::ToggleOnTop => {
                 s.always_on_top = !s.always_on_top;
                 let level = if s.always_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
-                ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
+                // A script's overlay stays at the bottom whatever it toggles.
+                if !self.instrument.active() {
+                    ctx.send_viewport_cmd(ViewportCommand::WindowLevel(level));
+                }
             }
             Command::ToggleAutostart => self.toggle_autostart(now),
             Command::ShowWelcome => self.welcome = true,
@@ -1079,7 +1086,11 @@ impl eframe::App for ChronoApp {
         // blink window, `due` owes nothing at all.
         let chime = self.alarm.due(self.countdown.overtime(now)) && self.settings.timer_sound;
         if chime {
-            chime::play();
+            // Counted either way, so a script can check the schedule without
+            // beeping at whoever is using the machine meanwhile.
+            if !self.instrument.active() {
+                chime::play();
+            }
             self.chimes += 1;
         }
         let alarm_wake = self.settings.timer_sound.then(|| self.alarm.next_in(&self.countdown, now)).flatten();

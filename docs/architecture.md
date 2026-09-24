@@ -172,6 +172,8 @@ app, and no extra toolchain.
   `--instrument`) adds a loopback command channel and frame statistics, so the
   scripts in `scripts/` can drive the real app without the real mouse and check
   how many frames each state costs. None of this is compiled into a release
-  build.
+  build. A scripted instance keeps out of the way of whoever is using the
+  machine: it never takes the focus, stays at the bottom of the window stack
+  instead of on top, and counts its chimes without playing them.
 - **Screenshots** for the README are rendered off screen by `src/shots.rs`, with
   the clock pinned to a fixed time.

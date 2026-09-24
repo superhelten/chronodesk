@@ -274,40 +274,50 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
         return 1;
     };
     match action {
-        Action::Install => match install(&layout, &current, config) {
-            Ok(_) => {
-                // An overlay that neither quit nor answers is a build from
-                // before it listened; the new exe would only step aside for it.
-                let deaf = config.is_some_and(|config| {
-                    instance::acquire(config).is_none() && !signal::send(config, Signal::Show)
-                });
-                if deaf {
-                    report(
-                        "ChronoDesk was installed, but an older copy is still running. \
-                         Quit it from its tray icon, then start ChronoDesk from the Start menu.",
-                        false,
-                    );
-                    return 0;
+        Action::Install => {
+            let upgrade = layout.exe().exists();
+            let was_running = config.is_some_and(|config| instance::acquire(config).is_none());
+            match install(&layout, &current, config) {
+                Ok(_) => {
+                    // An overlay that neither quit nor answers is a build from
+                    // before it listened; the new exe would only step aside for it.
+                    let deaf = config.is_some_and(|config| {
+                        instance::acquire(config).is_none() && !signal::send(config, Signal::Show)
+                    });
+                    if deaf {
+                        report(
+                            "ChronoDesk was installed, but an older copy is still running. \
+                             Quit it from its tray icon, then start ChronoDesk from the Start menu.",
+                            false,
+                        );
+                        return 0;
+                    }
+                    // A quiet upgrade puts back what it found: an overlay the user
+                    // had closed stays closed. A first installation starts it,
+                    // since seeing it is what installing it was for.
+                    if quiet && upgrade && !was_running {
+                        return 0;
+                    }
+                    // The installed copy takes it from here: it becomes the overlay,
+                    // or finds one running and asks it to show itself. Anything else
+                    // on the command line was meant for it.
+                    let passed_on = args.iter().filter(|arg| !matches!(arg.as_str(), "--install" | "--quiet"));
+                    // Started in its own folder: it runs for days, and would
+                    // otherwise hold on to wherever the setup was run from, a USB
+                    // stick or a Downloads folder the user wants to delete.
+                    let started = std::process::Command::new(layout.exe()).args(passed_on).current_dir(&layout.dir).spawn();
+                    if let Err(err) = started {
+                        report(&format!("ChronoDesk was installed but could not be started: {err}"), true);
+                        return 1;
+                    }
+                    0
                 }
-                // The installed copy takes it from here: it becomes the overlay,
-                // or finds one running and asks it to show itself. Anything else
-                // on the command line was meant for it.
-                let passed_on = args.iter().filter(|arg| !matches!(arg.as_str(), "--install" | "--quiet"));
-                // Started in its own folder: it runs for days, and would
-                // otherwise hold on to wherever the setup was run from, a USB
-                // stick or a Downloads folder the user wants to delete.
-                let started = std::process::Command::new(layout.exe()).args(passed_on).current_dir(&layout.dir).spawn();
-                if let Err(err) = started {
-                    report(&format!("ChronoDesk was installed but could not be started: {err}"), true);
-                    return 1;
+                Err(err) => {
+                    report(&format!("ChronoDesk could not be installed in {}: {err}", layout.dir.display()), true);
+                    1
                 }
-                0
             }
-            Err(err) => {
-                report(&format!("ChronoDesk could not be installed in {}: {err}", layout.dir.display()), true);
-                1
-            }
-        },
+        }
         Action::Uninstall => match uninstall(&layout, config) {
             Ok(()) => {
                 // The message first: it blocks until it is dismissed, and the
@@ -319,8 +329,7 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
             Err(err) => {
                 report(
                     &format!(
-                        "ChronoDesk could not be removed completely: {err}
-
+                        "ChronoDesk could not be removed completely: {err}\n\n\
                          Close whatever is using it and uninstall it again from Settings."
                     ),
                     true,

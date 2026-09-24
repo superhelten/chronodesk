@@ -5,9 +5,10 @@
 #    then never again — and the app draws only the handful of frames that takes;
 #  - with "Sound when finished" off, a finish is silent.
 #
-# `chimes=` in `stats` counts calls to the system sound, so this passes on a
-# muted machine too. It does play for real: expect three notification sounds.
-# The shortest timer is a minute, so the script takes about three.
+# `chimes=` in `stats` counts the chimes that fell due. A scripted instance
+# counts them without playing them, so the run makes no sound and can go on
+# while someone uses the machine. The shortest timer is a minute, so the
+# script takes about three.
 #
 # The window is made click-through for the run (`passthrough on`): a fresh
 # config opens the overlay at (80, 80), and a real pointer resting or passing

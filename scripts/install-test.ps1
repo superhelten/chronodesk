@@ -11,10 +11,12 @@
 #  - a "Start with Windows" entry that exists is repointed at the fixed path,
 #    and one that does not exist is not invented;
 #  - a setup with another version makes the running overlay quit, replaces the
-#    exe and starts the new one;
+#    exe and starts the new one; run quietly while the overlay is closed, it
+#    replaces the exe and leaves the overlay closed;
 #  - uninstalling removes all of it, the folder included, and keeps the settings,
-#    also the way Windows' own Uninstall button does it: with a message box that
-#    stays up for as long as the user takes to read it.
+#    also the way Windows' own Uninstall button does it (with -Interactive
+#    only): with a message box that stays up for as long as the user takes to
+#    read it. That box takes the focus, so it is left out unless asked for.
 #
 # The shortcut and the registry are read here with PowerShell rather than
 # through the app, so the assertions check what Windows will see.
@@ -24,6 +26,7 @@
 # registry nor a running overlay is touched, and the script checks that too.
 #
 # Run after: cargo build --release --features instrument
+param([switch]$Interactive)
 $ErrorActionPreference = 'Stop'
 $s = Split-Path $MyInvocation.MyCommand.Path
 $built = Join-Path (Split-Path $s) 'target\release\chronodesk.exe'
@@ -172,6 +175,20 @@ try {
   $now = Overlays
   $results += Check "upgrade: and the new one is running" ($now.Count -eq 1 -and $now[0].Id -ne $first[0].Id) "pid $($first[0].Id) -> $($now.Id -join ',')"
 
+  # --- E2: another version, quietly, with the overlay closed -----------------------------
+  Send "quit" | Out-Null
+  Disconnect
+  $closed = $now[0].WaitForExit(8000)
+  $code = Run $setup '--instrument', '--quiet'
+  Start-Sleep 3
+  $results += Check "quiet upgrade: the exe is replaced and a closed overlay stays closed" `
+    ($closed -and $code -eq 0 -and (Hash $installed) -eq (Hash $setup) -and (Overlays).Count -eq 0) `
+    "closed: $closed, exit code $code, overlays: $((Overlays).Count)"
+  Remove-Item $portFile -ErrorAction SilentlyContinue
+  $code = Run $setup2 '--instrument'
+  Connect
+  $now = Overlays
+
   # --- F: uninstall -------------------------------------------------------------------------
   Disconnect
   $code = Run $installed '--uninstall', '--quiet'
@@ -186,6 +203,7 @@ try {
   # --- G: the way Settings > Installed apps runs it -----------------------------------------
   # No --quiet: a message box reports the result, and the exe stays alive, and
   # undeletable, until it is dismissed. The clean-up has to outlast that.
+  if ($Interactive) {
   Remove-Item $portFile -ErrorAction SilentlyContinue
   Run $setup '--instrument', '--quiet' | Out-Null
   Connect; Disconnect
@@ -201,6 +219,7 @@ try {
   foreach ($i in 1..60) { if (-not (Test-Path $dir)) { break }; Start-Sleep -Milliseconds 250 }
   $results += Check "uninstall from Settings: says so, and the folder still goes however long the message stays up" `
     ($box -and $waiting -and -not (Test-Path $dir)) "message box: $box, held open 4 s: $waiting, folder left: $(Test-Path $dir)"
+  }
 
   $results += Check "throughout: the real folder, Start menu entry and registry were never touched" ((Real-State) -eq $realBefore) (Real-State)
 }

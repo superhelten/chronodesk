@@ -70,9 +70,8 @@ fn main() -> eframe::Result {
     // puts it on the exact pixel from `window_px`.
     let position = loaded.config.window.or(loaded.config.window_px).map_or([80.0, 80.0], |w| [w.x, w.y]);
 
-    // A test instance belongs to a script, not to whoever is at the keyboard:
-    // taking the focus would hand it their keystrokes (Space, R and 1-4 mean
-    // something here) and interrupt what they were typing.
+    // A test instance belongs to a script, not to whoever is at the keyboard,
+    // and must not get in the way of what they are doing.
     let scripted = instrument::requested(&args);
 
     let viewport = egui::ViewportBuilder::default()
@@ -87,8 +86,13 @@ fn main() -> eframe::Result {
         // bit the system's own minimise commands do not apply to it; a second
         // launch restores it if something minimised it anyway.
         .with_minimize_button(false)
-        .with_active(!scripted)
-        .with_always_on_top()
+        // An overlay never takes the focus when it starts, whether at login,
+        // after an update or from a script: it would pull whoever is in a
+        // full-screen game out of it. A click or a second launch focuses it.
+        .with_active(false)
+        // Nor may it sit on top of their game: a script's overlay stays at the
+        // bottom of the pile, where it draws just the same.
+        .with_window_level(if scripted { egui::WindowLevel::AlwaysOnBottom } else { egui::WindowLevel::AlwaysOnTop })
         .with_taskbar(false)
         .with_inner_size([220.0, 90.0])
         .with_position(position);
