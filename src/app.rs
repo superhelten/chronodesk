@@ -591,8 +591,14 @@ impl ChronoApp {
         ctx.request_repaint();
     }
 
+    /// One command per press. A held key repeats, and Space held down would
+    /// otherwise flip the counter about thirty times a second, writing the
+    /// config file each time, and leave it however the last flip fell.
     fn keyboard_commands(&self, ctx: &egui::Context) -> Vec<Command> {
         use egui::Key;
+        let pressed = |i: &egui::InputState, key: Key| {
+            i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key))
+        };
         ctx.input(|i| {
             [
                 (Key::Space, Command::StartPause),
@@ -603,7 +609,7 @@ impl ChronoApp {
                 (Key::Num4, Command::SetMode(Mode::Market)),
             ]
             .into_iter()
-            .filter(|(key, _)| i.key_pressed(*key))
+            .filter(|(key, _)| pressed(i, *key))
             .map(|(_, cmd)| cmd)
             .collect()
         })
@@ -1468,6 +1474,27 @@ mod tests {
         assert!(app.placement_pending.is_some());
         app.persist(&ctx, Instant::now(), Some(pos2(2000.0, 100.0)));
         assert_eq!(app.settings.window_px, saved.window_px);
+    }
+
+    #[test]
+    fn a_held_key_is_one_command() {
+        let ctx = egui::Context::default();
+        let app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        let space = |repeat| egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut commands = Vec::new();
+        let raw = egui::RawInput { events: vec![space(false), space(true), space(true)], ..Default::default() };
+        ctx.run_ui(raw, |ui| commands = app.keyboard_commands(ui.ctx())).textures_delta.clear();
+        assert_eq!(commands, vec![Command::StartPause]);
+
+        let raw = egui::RawInput { events: vec![space(true)], ..Default::default() };
+        ctx.run_ui(raw, |ui| commands = app.keyboard_commands(ui.ctx())).textures_delta.clear();
+        assert_eq!(commands, vec![], "still held");
     }
 
     #[test]

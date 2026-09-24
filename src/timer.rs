@@ -130,13 +130,13 @@ impl Countdown {
         self.is_finished(now).then(|| self.clock.elapsed(now) - self.duration)
     }
 
-    /// Start/pause. Toggling a finished countdown rearms it.
+    /// Start/pause. Toggling a finished countdown starts it again from the
+    /// top, which is what the menu's "Restart" promises.
     pub fn toggle(&mut self, now: Instant) {
         if self.is_finished(now) {
             self.clock.reset();
-        } else {
-            self.clock.toggle(now);
         }
+        self.clock.toggle(now);
     }
 
     pub fn reset(&mut self) {
@@ -436,13 +436,14 @@ mod tests {
     }
 
     #[test]
-    fn toggling_finished_countdown_rearms_it() {
+    fn toggling_finished_countdown_restarts_it() {
         let t0 = Instant::now();
         let mut cd = Countdown::new(ms(1000));
         cd.toggle(t0);
         cd.toggle(t0 + ms(4000));
         assert!(!cd.is_finished(t0 + ms(4000)));
-        assert_eq!(cd.remaining(t0 + ms(4000)), ms(1000));
+        assert!(cd.is_running(t0 + ms(4000)), "running again, not merely reset");
+        assert_eq!(cd.remaining(t0 + ms(4500)), ms(500));
     }
 
     #[test]
