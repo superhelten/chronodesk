@@ -62,7 +62,10 @@ fn main() -> eframe::Result {
         // would be back at every launch.
         config::Loaded::fallback(Vec::new(), None)
     });
-    let position = loaded.config.window.map_or([80.0, 80.0], |w| [w.x, w.y]);
+    // Only a first guess: the OS converts points with the scale of whichever
+    // monitor the window first comes up on. Once it runs, the placement check
+    // puts it on the exact pixel from `window_px`.
+    let position = loaded.config.window.or(loaded.config.window_px).map_or([80.0, 80.0], |w| [w.x, w.y]);
 
     // A test instance belongs to a script, not to whoever is at the keyboard:
     // taking the focus would hand it their keystrokes (Space, R and 1-4 mean

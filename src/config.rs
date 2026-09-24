@@ -90,7 +90,14 @@ pub struct Config {
     /// finds no config file at all starts out with it set: a file from before
     /// the field existed belongs to someone who knows the app already.
     pub first_run: bool,
-    /// Window position in points. `None` means "let the OS place it".
+    /// Window position in **physical pixels**, virtual-desktop coordinates:
+    /// the only unit that means the same on every monitor. A point is worth
+    /// whatever the scale of the monitor under the window says, and at startup
+    /// the window is not on its monitor yet. `None` means "let the OS place it".
+    pub window_px: Option<WindowPos>,
+    /// The same spot in points. Only a hint for creating the window, which
+    /// takes points, and what builds before `window_px` read; when both are
+    /// there `window_px` decides.
     pub window: Option<WindowPos>,
 }
 
@@ -122,6 +129,7 @@ impl Default for Config {
             stopwatch: None,
             countdown: None,
             first_run: true,
+            window_px: None,
             window: None,
         }
     }
@@ -141,11 +149,13 @@ impl Config {
             warnings.push(format!("'timer_minutes' {} out of range; clamped to {minutes}", self.timer_minutes));
             self.timer_minutes = minutes;
         }
-        if let Some(w) = self.window
-            && !(w.x.is_finite() && w.y.is_finite())
-        {
-            warnings.push("'window' has non-finite coordinates; ignored".to_owned());
-            self.window = None;
+        for (name, pos) in [("window_px", &mut self.window_px), ("window", &mut self.window)] {
+            if let Some(w) = *pos
+                && !(w.x.is_finite() && w.y.is_finite())
+            {
+                warnings.push(format!("'{name}' has non-finite coordinates; ignored"));
+                *pos = None;
+            }
         }
         let dim = if self.night_dim.is_finite() { self.night_dim.clamp(MIN_NIGHT_DIM, 1.0) } else { 0.7 };
         if dim != self.night_dim {
@@ -307,6 +317,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "stopwatch", &mut config.stopwatch, &mut warnings);
     field(&mut fields, "countdown", &mut config.countdown, &mut warnings);
     field(&mut fields, "first_run", &mut config.first_run, &mut warnings);
+    field(&mut fields, "window_px", &mut config.window_px, &mut warnings);
     field(&mut fields, "window", &mut config.window, &mut warnings);
     fields.remove("schema_version");
     for key in fields.keys() {
@@ -526,11 +537,11 @@ fn migrate_from_eframe(fields: &HashMap<String, Value>, warnings: &mut Vec<Strin
         }
     }
 
-    // eframe stored the position in pixels while we store points. They differ
-    // only on a scaled display, and then by one drag of the overlay.
+    // eframe stored the position in pixels, which is what `window_px` holds.
     if let Some(Value::String(window)) = fields.get("window") {
         match ron::from_str::<LegacyWindow>(window) {
-            Ok(LegacyWindow { outer_position_pixels: pos }) => config.window = pos,
+            // Also the startup hint: exact unless the display was scaled.
+            Ok(LegacyWindow { outer_position_pixels: pos }) => (config.window_px, config.window) = (pos, pos),
             Err(err) => warnings.push(format!("could not migrate the previous window position ({err})")),
         }
     }
@@ -571,7 +582,8 @@ mod tests {
         let path = dir.file();
         let mut config = Config { timer_minutes: 45, mode: Mode::Timer, ..Default::default() };
         save(&path, &config).unwrap();
-        config.window = Some(WindowPos { x: 12.5, y: 34.0 });
+        config.window_px = Some(WindowPos { x: -1918.0, y: 34.0 });
+        config.window = Some(WindowPos { x: -1278.7, y: 22.7 });
         save(&path, &config).unwrap();
 
         let loaded = load(&path);
@@ -1017,7 +1029,8 @@ mod tests {
         assert_eq!(loaded.config.mode, Mode::Timer);
         assert_eq!(loaded.config.timer_minutes, 60);
         assert_eq!(loaded.config.size, Size::Large);
-        assert_eq!(loaded.config.window, Some(WindowPos { x: 3005.0, y: 133.0 }));
+        assert_eq!(loaded.config.window_px, Some(WindowPos { x: 3005.0, y: 133.0 }), "eframe kept pixels");
+        assert_eq!(loaded.config.window, loaded.config.window_px);
         assert_eq!(loaded.config.schema_version, SCHEMA_VERSION);
         assert!(loaded.migrated, "a legacy file must be flagged for rewriting");
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
@@ -1122,6 +1135,25 @@ mod tests {
         write(&dir.0.join("ok.ron"), "(schema_version:1)");
         assert!(!load(&dir.0.join("ok.ron")).unreadable);
         assert!(!load(&dir.0.join("absent.ron")).unreadable);
+    }
+
+    /// A file from before `window_px` keeps its position in points, and one
+    /// with a bad pixel position still has the points to fall back on.
+    #[test]
+    fn a_position_in_points_alone_is_still_read() {
+        let dir = Dir::new("window_points");
+        let path = dir.file();
+        write(&path, "(schema_version:1,window:Some((x:40.0,y:50.0)))");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.window, Some(WindowPos { x: 40.0, y: 50.0 }));
+        assert_eq!(loaded.config.window_px, None);
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        write(&path, "(schema_version:1,window_px:Some((x:\"left\",y:1.0)),window:Some((x:40.0,y:50.0)))");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.window_px, None);
+        assert_eq!(loaded.config.window, Some(WindowPos { x: 40.0, y: 50.0 }));
+        assert!(loaded.warnings[0].contains("window_px"), "{:?}", loaded.warnings);
     }
 
     #[test]

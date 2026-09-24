@@ -5,7 +5,9 @@
 # The work area is read here straight from Windows (SPI_GETWORKAREA) rather than
 # taken from the app, so the assertions check the overlay against the OS instead
 # of against the app's own arithmetic. CHRONODESK_CONFIG points the run at a
-# scratch file, so the config you actually use is never touched.
+# scratch file, so the config you actually use is never touched, and the guard
+# against a second instance is keyed on that file, so an overlay you have
+# running is left alone.
 #
 # Run after: cargo build --release --features instrument
 $ErrorActionPreference = 'Stop'
@@ -61,9 +63,8 @@ $work = New-Object P+RECT
 [P]::SystemParametersInfoW(0x0030, 0, [ref]$work, 0) | Out-Null
 
 $results = @()
+$proc = $null
 try {
-  Get-Process chronodesk -ErrorAction SilentlyContinue | Stop-Process -Force
-  Start-Sleep 1
   Remove-Item $portFile -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force $scratch | Out-Null
 
@@ -81,7 +82,6 @@ try {
 
   # --- A: the stranded position is recognised and recovered at startup -------
   $report = Send "placement"
-  $ppp = Field $report 'ppp'
   $results += Check "startup: the stranded position is detected" ($report -match 'decision=off-screen') $report
   $results += Check "startup: the work area was read per monitor" ($report -match 'work=\(') ""
 
@@ -96,19 +96,27 @@ try {
     ($gapRight -gt 0 -and $gapRight -le 70 -and $gapTop -gt 0 -and $gapTop -le 70) `
     "right gap $gapRight px, top gap $gapTop px (24 pt scaled by the monitor)"
 
-  # --- B: a valid position is left alone ------------------------------------
-  $before = Rect $proc
-  Send ("place {0} {1}" -f [int](200 / $ppp), [int](200 / $ppp)) | Out-Null
+  # --- B: a valid position is kept, and the window is put on that pixel ------
+  # Positions are physical pixels: the one unit that means the same on every
+  # monitor, whatever its scaling.
+  $keepAt = @{ x = $work.L + 200; y = $work.T + 200 }
+  Send ("place {0} {1}" -f $keepAt.x, $keepAt.y) | Out-Null
   Start-Sleep 1
   $keep = Send "placement"
   $after = Rect $proc
   $results += Check "runtime: a position inside the work area is kept" ($keep -match 'decision=keep') $keep
-  $results += Check "runtime: keeping does not move the window" `
-    ($after.L -eq $before.L -and $after.T -eq $before.T) ""
+  $results += Check "runtime: the window sits on the kept pixel" `
+    ([Math]::Abs($after.L - $keepAt.x) -le 2 -and [Math]::Abs($after.T - $keepAt.y) -le 2) `
+    "window ($($after.L),$($after.T)) vs ($($keepAt.x),$($keepAt.y))"
+  Send ("place {0} {1}" -f $after.L, $after.T) | Out-Null
+  Start-Sleep 1
+  $again = Rect $proc
+  $results += Check "runtime: a position it already has does not move it" `
+    ((Send "placement") -match 'corrected=0' -and $again.L -eq $after.L -and $again.T -eq $after.T) ""
 
   # --- C: a position overlapping the taskbar is nudged back in --------------
   $overlapY = $work.B - 30
-  Send ("place {0} {1}" -f [int](500 / $ppp), [int]($overlapY / $ppp)) | Out-Null
+  Send ("place {0} {1}" -f ($work.L + 500), $overlapY) | Out-Null
   Start-Sleep 1
   $nudged = Send "placement"
   $r2 = Rect $proc
@@ -126,14 +134,14 @@ try {
 
   $text = Get-Content $ron -Raw
   # The file is pretty-printed across several lines, hence the loose whitespace.
-  $saved = if ($text -match 'window:\s*Some\(\(\s*x:\s*([-0-9.]+),\s*y:\s*([-0-9.]+)') {
+  $saved = if ($text -match 'window_px:\s*Some\(\(\s*x:\s*([-0-9.]+),\s*y:\s*([-0-9.]+)') {
     @{ x = [double]$matches[1]; y = [double]$matches[2] }
   } else { $null }
   $results += Check "config: a position was written back to app.ron" ($null -ne $saved) $text
   if ($saved) {
     $results += Check "config: the stranded position is gone" `
-      ($saved.x -ne 7000.0 -and $saved.y -ne 2400.0) "saved ($($saved.x),$($saved.y)) pt"
-    $px = @{ x = [int]($saved.x * $ppp); y = [int]($saved.y * $ppp) }
+      ($saved.x -ne 7000.0 -and $saved.y -ne 2400.0) "saved ($($saved.x),$($saved.y)) px"
+    $px = @{ x = [int]$saved.x; y = [int]$saved.y }
     $results += Check "config: the written position is inside the work area" `
       ($px.x -ge $work.L -and $px.y -ge $work.T -and ($px.x + $w) -le $work.R -and ($px.y + $h) -le $work.B) `
       "saved ($($px.x),$($px.y)) px, overlay ${w}x${h}"
@@ -147,11 +155,9 @@ finally {
   if ($client) { $client.Close() }
   $env:CHRONODESK_CONFIG = $null
   Start-Sleep 1
-  Get-Process chronodesk -ErrorAction SilentlyContinue | Stop-Process -Force
+  # Only the instance this script started.
+  if ($proc -and -not $proc.HasExited) { $proc | Stop-Process -Force }
   Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
-  Start-Sleep 1
-  # Back to the user's own overlay and their own config file.
-  Start-Process $exe
 }
 $results
 "", ("{0} passed, {1} failed" -f ($results | ? { $_ -like 'PASS*' }).Count, ($results | ? { $_ -like 'FAIL*' }).Count)

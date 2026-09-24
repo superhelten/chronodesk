@@ -48,6 +48,13 @@ Losing settings is worse than failing to save them, so:
   by its keys: every file this app writes has a `window` too.
 - Every field is flat and has a default, so adding a setting does not need a
   schema change. `SCHEMA_VERSION` is still 1.
+- The window position is kept twice. `window_px` is in physical pixels and is
+  what counts: a point is worth whatever the monitor under the window says,
+  so with screens at different scaling a position in points moves on every
+  launch. `window` is the same spot in points, only as the hint the window is
+  created with. Windows converts that with the scale of whichever monitor the
+  window first appears on, so once the app runs, the placement check puts the
+  window on the exact pixel, or somewhere visible if that screen is gone.
 
 Settings are written 1.5 seconds after the last change and on exit. Counter
 state is the exception and is written immediately (see below). A write that

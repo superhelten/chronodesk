@@ -39,8 +39,8 @@ const WAKE_SLACK: Duration = Duration::from_millis(25);
 /// How long to wait for a window move to take effect before trusting the
 /// window's own reported position again.
 const PLACEMENT_TIMEOUT: Duration = Duration::from_millis(1500);
-/// A move is expressed in points and applied in whole pixels, so the window
-/// lands within rounding distance of where it was asked to go.
+/// A move lands on whole pixels, so the window ends up within rounding
+/// distance of where it was asked to go.
 const ARRIVAL_TOLERANCE_PX: f32 = 2.0;
 /// Frames the placement check may wait for the display scale to settle.
 const PLACEMENT_DEFERRALS: u8 = 10;
@@ -185,7 +185,7 @@ pub struct ChronoApp {
     window_styled: bool,
     /// The position as it came out of `app.ron`, kept apart from `settings`
     /// because `persist` overwrites that one with wherever the window actually is.
-    saved_position: Option<config::WindowPos>,
+    saved_position: Option<SavedPosition>,
     /// Frames the placement check may still be put off while the display scale
     /// settles; `None` once it has run. Counted down rather than waited on, so
     /// a scale that never agrees costs a few frames instead of looping forever.
@@ -294,7 +294,7 @@ impl ChronoApp {
             attention: None,
             countdown,
             saved: settings.clone(),
-            saved_position: settings.window,
+            saved_position: SavedPosition::of(&settings),
             placement_pending: Some(PLACEMENT_DEFERRALS),
             pending_move: None,
             settings,
@@ -346,18 +346,17 @@ impl ChronoApp {
         Local::now()
     }
 
-    /// Notes the current window position and writes the config once it has been
-    /// unchanged for [`SAVE_DELAY`].
-    fn persist(&mut self, ctx: &egui::Context, now: Instant) {
-        // While a move of ours is in flight the window still reports the old
-        // position, and recording it would undo the move in the file.
-        if self.placement_settled(ctx, now)
-            && let Some(rect) = ctx.input(|i| i.viewport().outer_rect)
+    /// Notes the current window position (`position`, physical pixels) and
+    /// writes the config once it has been unchanged for [`SAVE_DELAY`].
+    fn persist(&mut self, ctx: &egui::Context, now: Instant, position: Option<Pos2>) {
+        // Until the placement check has run the window is wherever the OS put
+        // it, and while a move of ours is in flight it still reports the old
+        // position: recording either would undo the placement in the file.
+        if self.placement_pending.is_none()
+            && self.placement_settled(ctx, now, position)
+            && let Some(px) = position
         {
-            let pos = config::WindowPos { x: rect.min.x, y: rect.min.y };
-            if self.settings.window != Some(pos) {
-                self.settings.window = Some(pos);
-            }
+            self.record_position(px, ctx.pixels_per_point());
         }
 
         if self.settings != self.saved && self.dirty_since.is_none() {
@@ -383,16 +382,22 @@ impl ChronoApp {
         self.save_failed = result.is_err();
     }
 
+    /// Both units from one reading, so they always name the same spot.
+    fn record_position(&mut self, px: Pos2, ppp: f32) {
+        let window_px = Some(config::WindowPos { x: px.x, y: px.y });
+        if self.settings.window_px != window_px {
+            self.settings.window_px = window_px;
+            self.settings.window = Some(config::WindowPos { x: px.x / ppp, y: px.y / ppp });
+        }
+    }
+
     /// True once the window sits where we last asked it to, so its reported
     /// position can be trusted again.
-    fn placement_settled(&mut self, ctx: &egui::Context, now: Instant) -> bool {
+    fn placement_settled(&mut self, ctx: &egui::Context, now: Instant, position: Option<Pos2>) -> bool {
         let Some((target, since)) = self.pending_move else {
             return true;
         };
-        let ppp = ctx.pixels_per_point();
-        let arrived = ctx.input(|i| i.viewport().outer_rect).is_some_and(|rect| {
-            (rect.min.to_vec2() * ppp - target.to_vec2()).length() <= ARRIVAL_TOLERANCE_PX
-        });
+        let arrived = position.is_some_and(|px| (px - target).length() <= ARRIVAL_TOLERANCE_PX);
         // A window manager is free to ignore a move, so this cannot wait forever.
         if arrived || now.duration_since(since) >= PLACEMENT_TIMEOUT {
             self.pending_move = None;
@@ -430,38 +435,56 @@ impl ChronoApp {
             return;
         };
         let monitors = placement::monitors(frame);
-        let saved_px = pos2(saved.x * ppp, saved.y * ppp);
-        let outcome = placement::evaluate(saved_px, size, zoom, &monitors);
-
-        let decision = match outcome {
-            placement::Outcome::Keep => "keep".to_owned(),
+        let saved_px = saved.pixels(ppp);
+        let (target, decision) = match placement::evaluate(saved_px, size, zoom, &monitors) {
+            placement::Outcome::Keep => (saved_px, "keep".to_owned()),
             placement::Outcome::Move { to, reason } => {
-                let to_pt = pos2(to.x / ppp, to.y / ppp);
-                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(to_pt));
-                self.settings.window = Some(config::WindowPos { x: to_pt.x, y: to_pt.y });
-                self.pending_move = Some((to, now));
-                // Straight to disk: the point of the exercise is that the next
-                // launch starts from a position that exists.
-                self.write_config();
                 eprintln!(
-                    "ChronoDesk: saved position ({:.0},{:.0}) is {}; moved to ({:.0},{:.0})",
-                    saved.x,
-                    saved.y,
+                    "ChronoDesk: saved position ({:.0},{:.0}) px is {}; moved to ({:.0},{:.0}) px",
+                    saved_px.x,
+                    saved_px.y,
                     reason.as_str(),
-                    to_pt.x,
-                    to_pt.y,
+                    to.x,
+                    to.y,
                 );
-                ctx.request_repaint();
-                format!("{} moved_to_pt=({:.1},{:.1}) moved_to_px=({:.0},{:.0})", reason.as_str(), to_pt.x, to_pt.y, to.x, to.y)
+                (to, format!("{} moved_to_px=({:.0},{:.0})", reason.as_str(), to.x, to.y))
             }
         };
+
+        // Even a position that is kept has to be applied: the window was created
+        // at it in points, which the OS converted with the scale of whichever
+        // monitor the window first came up on. With screens at different
+        // scaling that is the wrong one, and only pixels land exactly.
+        let actual = window_position_px(ctx, frame);
+        let corrected = actual.is_none_or(|px| (px - target).length() > ARRIVAL_TOLERANCE_PX);
+        if corrected {
+            match frame.winit_window() {
+                // Physical, so nothing is scaled on the way.
+                Some(window) => window.set_outer_position(winit::dpi::PhysicalPosition::new(
+                    target.x.round() as i32,
+                    target.y.round() as i32,
+                )),
+                None => ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(target.x / ppp, target.y / ppp))),
+            }
+            self.pending_move = Some((target, now));
+            ctx.request_repaint();
+        }
+        self.record_position(target, ppp);
+        if target != saved_px {
+            // Straight to disk: the point of the exercise is that the next
+            // launch starts from a position that exists.
+            self.write_config();
+        }
+        let saved_unit = match saved {
+            SavedPosition::Pixels(_) => "px",
+            SavedPosition::Points(_) => "pt",
+        };
         self.instrument.set_placement_report(format!(
-            "decision={decision} ppp={ppp:.3} zoom={zoom:.3} size_pt=({:.1},{:.1}) \
-             saved_pt=({:.1},{:.1}) saved_px=({:.0},{:.0}) monitors=[{}]",
+            "decision={decision} corrected={} ppp={ppp:.3} zoom={zoom:.3} size_pt=({:.1},{:.1}) \
+             saved_in={saved_unit} saved_px=({:.0},{:.0}) monitors=[{}]",
+            u8::from(corrected),
             size.x,
             size.y,
-            saved.x,
-            saved.y,
             saved_px.x,
             saved_px.y,
             placement::describe(&monitors),
@@ -501,7 +524,7 @@ impl ChronoApp {
     fn surface(&mut self, ctx: &egui::Context, now: Instant) {
         ctx.send_viewport_cmd(ViewportCommand::Focus);
         self.attention = Some(now);
-        self.saved_position = self.settings.window;
+        self.saved_position = SavedPosition::of(&self.settings);
         self.placement_pending = Some(PLACEMENT_DEFERRALS);
     }
 
@@ -919,7 +942,7 @@ impl eframe::App for ChronoApp {
         // Now that the real size is known, the saved position can be judged
         // against the monitors that are actually attached.
         if let Some(synthetic) = self.instrument.take_place_request() {
-            self.saved_position = Some(config::WindowPos { x: synthetic.x, y: synthetic.y });
+            self.saved_position = Some(SavedPosition::Pixels(synthetic));
             self.placement_pending = Some(PLACEMENT_DEFERRALS);
         }
         if self.placement_pending.is_some() {
@@ -1010,7 +1033,7 @@ impl eframe::App for ChronoApp {
         self.recheck_autostart(now);
         let state = self.menu_state(now);
         self.tray.sync(state);
-        self.persist(&ctx, now);
+        self.persist(&ctx, now, window_position_px(&ctx, frame));
 
         // Schedule from the readout actually drawn: sampling the clock again here
         // could straddle a boundary and leave a stale value up for a full period.
@@ -1295,6 +1318,42 @@ fn strip_window_chrome(frame: &eframe::Frame) {
 #[cfg(not(windows))]
 fn strip_window_chrome(_frame: &eframe::Frame) {}
 
+/// Where `app.ron` puts the overlay.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SavedPosition {
+    /// Physical pixels, which mean the same on every monitor.
+    Pixels(Pos2),
+    /// Points, from a file written before positions were kept in pixels.
+    /// Converted with the scale the window has now, which is right as long as
+    /// it came up on the monitor it was saved on.
+    Points(Pos2),
+}
+
+impl SavedPosition {
+    fn of(settings: &Config) -> Option<Self> {
+        let pos = |w: config::WindowPos| pos2(w.x, w.y);
+        settings.window_px.map(|w| Self::Pixels(pos(w))).or_else(|| settings.window.map(|w| Self::Points(pos(w))))
+    }
+
+    fn pixels(self, ppp: f32) -> Pos2 {
+        match self {
+            Self::Pixels(px) => px,
+            Self::Points(pt) => pos2(pt.x * ppp, pt.y * ppp),
+        }
+    }
+}
+
+/// Where the window is, in physical pixels, asked of the OS directly: no scale
+/// factor enters into it, so one that lags a frame behind a move to another
+/// monitor cannot skew it.
+fn window_position_px(ctx: &egui::Context, frame: &eframe::Frame) -> Option<Pos2> {
+    if let Some(window) = frame.winit_window() {
+        return window.outer_position().ok().map(|px| pos2(px.x as f32, px.y as f32));
+    }
+    let ppp = ctx.pixels_per_point();
+    ctx.input(|i| i.viewport().outer_rect).map(|rect| pos2(rect.min.x * ppp, rect.min.y * ppp))
+}
+
 fn minutes(min: u64) -> Duration {
     Duration::from_secs(min * 60)
 }
@@ -1341,19 +1400,19 @@ mod tests {
         let t0 = Instant::now();
 
         app.settings.backdrop = true;
-        app.persist(&ctx, t0);
+        app.persist(&ctx, t0, None);
         assert!(app.dirty_since.is_some());
-        app.persist(&ctx, t0 + SAVE_DELAY);
+        app.persist(&ctx, t0 + SAVE_DELAY, None);
         assert!(app.dirty_since.is_none(), "the attempt was made");
-        app.persist(&ctx, t0 + SAVE_DELAY * 2);
+        app.persist(&ctx, t0 + SAVE_DELAY * 2, None);
         assert!(app.dirty_since.is_none(), "and is not repeated without a change");
 
         app.settings.chroma = true;
-        app.persist(&ctx, t0 + SAVE_DELAY * 3);
+        app.persist(&ctx, t0 + SAVE_DELAY * 3, None);
         assert!(app.dirty_since.is_some(), "a new change is tried again");
 
         // The folder goes away and quitting gets the settings out after all.
-        app.persist(&ctx, t0 + SAVE_DELAY * 4);
+        app.persist(&ctx, t0 + SAVE_DELAY * 4, None);
         std::fs::remove_dir(&path).unwrap();
         eframe::App::on_exit(&mut app, None);
         let saved = config::load(&path).config;
@@ -1369,11 +1428,45 @@ mod tests {
         let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
         let t0 = Instant::now();
         app.settings.backdrop = true;
-        app.persist(&ctx, t0);
-        app.persist(&ctx, t0 + SAVE_DELAY);
-        app.persist(&ctx, t0 + SAVE_DELAY * 2);
+        app.persist(&ctx, t0, None);
+        app.persist(&ctx, t0 + SAVE_DELAY, None);
+        app.persist(&ctx, t0 + SAVE_DELAY * 2, None);
         assert!(app.dirty_since.is_none());
         assert!(!app.save_failed, "nothing was tried");
+    }
+
+    #[test]
+    fn a_position_in_pixels_wins_and_one_in_points_scales_with_the_window() {
+        let at = |x, y| Some(config::WindowPos { x, y });
+        let both = Config { window_px: at(3000.0, 150.0), window: at(2000.0, 100.0), ..Config::default() };
+        assert_eq!(SavedPosition::of(&both).map(|s| s.pixels(1.5)), Some(pos2(3000.0, 150.0)));
+        let points = Config { window: at(2000.0, 100.0), ..Config::default() };
+        assert_eq!(SavedPosition::of(&points).map(|s| s.pixels(1.5)), Some(pos2(3000.0, 150.0)));
+        assert_eq!(SavedPosition::of(&Config::default()), None);
+    }
+
+    /// Dragged to a 150 % screen: the file gets the exact pixel, and the
+    /// points that go with it for the next window to be created at.
+    #[test]
+    fn a_recorded_position_keeps_pixels_and_points_together() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        app.placement_pending = None;
+        app.persist(&ctx, Instant::now(), Some(pos2(3000.0, 150.0)));
+        assert_eq!(app.settings.window_px, Some(config::WindowPos { x: 3000.0, y: 150.0 }));
+        assert_eq!(app.settings.window, Some(config::WindowPos { x: 3000.0 / ctx.pixels_per_point(), y: 150.0 / ctx.pixels_per_point() }));
+    }
+
+    /// Before the placement check has run, the window is wherever the OS put
+    /// it, and that must not reach the file.
+    #[test]
+    fn nothing_is_recorded_before_the_placement_check() {
+        let ctx = egui::Context::default();
+        let saved = Config { window_px: Some(config::WindowPos { x: 3000.0, y: 150.0 }), ..Config::default() };
+        let mut app = ChronoApp::pinned(&ctx, saved.clone(), Local::now());
+        assert!(app.placement_pending.is_some());
+        app.persist(&ctx, Instant::now(), Some(pos2(2000.0, 100.0)));
+        assert_eq!(app.settings.window_px, saved.window_px);
     }
 
     #[test]
