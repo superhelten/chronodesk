@@ -241,6 +241,12 @@ fn remove_leftovers(dir: &Path) {
     }
 }
 
+/// True when `exe` is the installed copy: the one an update may replace. A
+/// portable copy is left to its owner.
+pub fn is_installed(exe: &Path) -> bool {
+    Layout::system().is_some_and(|layout| same_file(exe, &layout.exe()))
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     matches!((fs::canonicalize(a), fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }

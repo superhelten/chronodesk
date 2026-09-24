@@ -49,13 +49,19 @@ The exes are not code-signed yet, so Windows SmartScreen may warn about an unrec
 
 ### Updates
 
-Once a day ChronoDesk asks GitHub which release is the latest. When there is a newer one, the menu
-starts with *Update available*, which opens the release page to download it from; running the new
-setup replaces the installed version and keeps your settings. Nothing is downloaded or installed
-by the app itself. The request goes to `github.com/superhelten/chronodesk/releases/latest`, sends
-nothing but the app's name and version, and can be switched off under *Check for updates* in the
-menu. You can also watch the repository on GitHub (*Watch → Custom → Releases*) to hear about new
-versions by e-mail.
+Once a day ChronoDesk asks GitHub which release is the latest. When there is a newer one, the tray
+icon gets a green dot and the menu starts with *Update to ChronoDesk x.y.z now*. Clicking it
+downloads the new setup, checks it and installs it: the overlay closes and the new version starts
+in its place, with your settings. Nothing is downloaded until you click.
+
+Every release is signed with a key that is kept offline, not on GitHub, and the app installs an
+update only when its signature and checksum match. If they do not, or you use the portable exe,
+the item opens the release page instead, to download the setup by hand.
+
+The daily request goes to `github.com/superhelten/chronodesk/releases/latest` and sends nothing but
+the app's name and version. It can be switched off under *Check for updates* in the menu. You can
+also watch the repository on GitHub (*Watch → Custom → Releases*) to hear about new versions by
+e-mail; versions before 0.2.0 do not check by themselves.
 
 ## Using it
 
@@ -144,9 +150,22 @@ and leaves an overlay you already have running alone.
 | `install-test.ps1` | install, upgrade and uninstall into a scratch folder and registry key |
 | `welcome-test.ps1` | the welcome card on first launch |
 | `resume-test.ps1` | a running stopwatch or timer survives the app being killed |
-| `chime-test.ps1` | the timer chime (plays the sound) |
+| `chime-test.ps1` | the timer chime (counted, not played) |
 
 Run them with PowerShell 7 (`pwsh`).
+
+### Releasing
+
+Push a tag `vX.Y.Z` matching the version in `Cargo.toml`; the release workflow builds the exes and
+publishes them with `SHA256SUMS.txt`. Then sign the release on the machine that holds the signing
+key, which the app needs before it installs the update by itself:
+
+```sh
+pwsh -File scripts/sign-release.ps1 -Tag vX.Y.Z   # checks the published files, uploads SHA256SUMS.txt.sig
+```
+
+The key never goes to GitHub or CI. `-Init` creates it and prints the public half that
+`src/update.rs` carries.
 
 ### Screenshots
 

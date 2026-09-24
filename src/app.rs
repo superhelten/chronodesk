@@ -17,6 +17,7 @@ use crate::clock::{ClockFormat, ClockStyle, clock_readout};
 use crate::ring;
 use crate::config::{self, Config};
 use crate::digital;
+use crate::install;
 use crate::instrument::{Cause, Instrument};
 use crate::layout::{DerivedLayout, Font, LayoutKey, Metrics};
 use crate::market::{self, BoardStyle, Market};
@@ -216,6 +217,12 @@ pub struct ChronoApp {
     /// Only the real overlay asks GitHub: not a script's, and not one being
     /// rendered off screen in a test.
     updates_allowed: bool,
+    /// Where the update on offer stands; see [`UpdateStep`].
+    update_step: UpdateStep,
+    /// A download under way: the verified setup, or why there is none.
+    update_download: Option<Receiver<Result<PathBuf, update::Refused>>>,
+    /// This exe is the installed copy, which an update may replace.
+    installed: bool,
     /// The welcome card is up instead of the readout.
     welcome: bool,
     /// Word from later launches: show yourself, or quit for the installer.
@@ -276,8 +283,15 @@ impl ChronoApp {
         let tray = Tray::new(&cc.egui_ctx, !instrument.active());
         let exe = std::env::current_exe().ok().filter(|_| Autostart::available());
         let updates_allowed = !instrument.active();
+        if updates_allowed {
+            // Setups earlier updates downloaded; off the UI thread, since the
+            // temp folder can hold thousands of files.
+            let _ = std::thread::Builder::new().name("update clean-up".to_owned()).spawn(update::clean_downloads);
+        }
+        let installed = std::env::current_exe().is_ok_and(|exe| install::is_installed(&exe));
         let mut app = Self::assemble(&cc.egui_ctx, settings, writable_path, signals, tray, instrument, exe);
         app.updates_allowed = updates_allowed;
+        app.installed = installed;
         app.dirty_since = repaired.then(Instant::now);
         Ok(app)
     }
@@ -328,6 +342,9 @@ impl ChronoApp {
             update_check: None,
             update_retry: None,
             updates_allowed: false,
+            update_step: UpdateStep::Offered,
+            update_download: None,
+            installed: false,
             dirty_since: None,
             locked: false,
             stopwatch,
@@ -558,6 +575,7 @@ impl ChronoApp {
     /// anyway: it never wakes the overlay for it. The request runs on a thread
     /// of its own, and its answer costs one frame.
     fn check_for_updates(&mut self, ctx: &egui::Context, now: Instant) {
+        self.poll_update_download();
         if let Some(pending) = &self.update_check {
             let answer = match pending.try_recv() {
                 Ok(answer) => answer,
@@ -568,7 +586,11 @@ impl ChronoApp {
             match answer {
                 Some(latest) => {
                     self.settings.update_checked = epoch_s(SystemTime::now());
-                    self.settings.update_available = (latest > Version::current()).then(|| latest.to_string());
+                    let offer = (latest > Version::current()).then(|| latest.to_string());
+                    if offer != self.settings.update_available {
+                        self.update_step = UpdateStep::Offered;
+                    }
+                    self.settings.update_available = offer;
                 }
                 None => self.update_retry = Some(now + update::RETRY_AFTER),
             }
@@ -593,6 +615,71 @@ impl ChronoApp {
             Ok(_) => self.update_check = Some(rx),
             Err(_) => self.update_retry = Some(now + update::RETRY_AFTER),
         }
+    }
+
+    /// The menu's update item was clicked. The installed copy downloads the
+    /// release, verifies it and runs its setup, which replaces this exe and
+    /// starts the new one; a portable copy, or one whose download did not
+    /// verify, gets the release page instead.
+    fn start_update(&mut self, ctx: &egui::Context) {
+        let Some(version) = self.settings.update_available.as_deref().and_then(Version::parse) else { return };
+        // A script's overlay, or one in a test, neither downloads nor opens a browser.
+        if !self.updates_allowed {
+            return;
+        }
+        match self.update_step {
+            UpdateStep::Offered if self.installed => {
+                let (tx, rx) = mpsc::channel();
+                let ctx = ctx.clone();
+                let spawned = std::thread::Builder::new().name("update download".to_owned()).spawn(move || {
+                    let _ = tx.send(update::download_setup(version));
+                    ctx.request_repaint();
+                });
+                if spawned.is_ok() {
+                    self.update_download = Some(rx);
+                    self.update_step = UpdateStep::Downloading;
+                } else {
+                    update::open_release_page(version);
+                }
+            }
+            UpdateStep::Downloading | UpdateStep::Installing => {}
+            _ => update::open_release_page(version),
+        }
+    }
+
+    /// Hands a verified download to its setup, which asks this overlay to
+    /// quit, replaces the exe and starts the new version in its place.
+    fn poll_update_download(&mut self) {
+        let Some(pending) = &self.update_download else { return };
+        let result = match pending.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err(update::Refused::Download(std::io::Error::other("stopped"))),
+        };
+        self.update_download = None;
+        self.update_step = match result.map(|setup| std::process::Command::new(&setup).arg("--quiet").spawn()) {
+            Ok(Ok(_)) => UpdateStep::Installing,
+            Ok(Err(err)) => {
+                eprintln!("ChronoDesk: could not start the update: {err}");
+                UpdateStep::Failed
+            }
+            Err(refused) => {
+                eprintln!("ChronoDesk: update not installed: {refused}");
+                UpdateStep::Failed
+            }
+        };
+    }
+
+    /// The menu's update item: what it says and whether it can be clicked.
+    fn update_item(&self) -> Option<(String, bool)> {
+        let version = self.settings.update_available.as_deref()?;
+        Some(match self.update_step {
+            UpdateStep::Offered if self.installed => (format!("Update to ChronoDesk {version} now"), true),
+            UpdateStep::Offered => (format!("Update available: ChronoDesk {version}…"), true),
+            UpdateStep::Downloading => (format!("Downloading ChronoDesk {version}…"), false),
+            UpdateStep::Installing => (format!("Installing ChronoDesk {version}…"), false),
+            UpdateStep::Failed => (format!("Update failed: download ChronoDesk {version}…"), true),
+        })
     }
 
     /// A running counter is saved as the wall-clock moment it started, which
@@ -702,11 +789,7 @@ impl ChronoApp {
             Command::ToggleAutostart => self.toggle_autostart(now),
             Command::ShowWelcome => self.welcome = true,
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
-            Command::OpenUpdate => {
-                if let Some(version) = s.update_available.as_deref().and_then(Version::parse) {
-                    update::open_release_page(version);
-                }
-            }
+            Command::Update => {}
             Command::ToggleUpdateCheck => {
                 s.check_updates = !s.check_updates;
                 // Switched off, it offers nothing it found before either.
@@ -714,6 +797,9 @@ impl ChronoApp {
                     s.update_available = None;
                 }
             }
+        }
+        if cmd == Command::Update {
+            self.start_update(ctx);
         }
         if counters_touched {
             self.save_counters(now);
@@ -809,7 +895,7 @@ impl ChronoApp {
             autostart: self.autostart_on.0,
             autostart_available: self.exe.is_some(),
             check_updates: s.check_updates,
-            update_available: s.update_available.clone(),
+            update: self.update_item(),
         }
     }
 
@@ -1531,6 +1617,18 @@ impl<K: PartialEq> WidthFloor<K> {
     }
 }
 
+/// How far the update on offer has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateStep {
+    /// Found by the daily check; a click starts it.
+    Offered,
+    Downloading,
+    /// The setup runs, and is about to ask this overlay to quit.
+    Installing,
+    /// The download failed or did not verify; a click opens the release page.
+    Failed,
+}
+
 /// Where `app.ron` puts the overlay.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SavedPosition {
@@ -1778,6 +1876,42 @@ mod tests {
         assert!(!app.settings.check_updates && app.settings.update_available.is_none());
         app.tray.sync(app.menu_state(now));
         assert_eq!(app.tray.top_level(), (plain, false));
+    }
+
+    #[test]
+    fn the_update_item_says_what_a_click_will_do() {
+        let ctx = egui::Context::default();
+        let offer = Config { update_available: Some("999.0.0".to_owned()), ..Config::default() };
+        let mut app = ChronoApp::pinned(&ctx, offer, Local::now());
+        assert_eq!(app.update_item(), Some(("Update available: ChronoDesk 999.0.0…".to_owned(), true)), "portable");
+        app.installed = true;
+        assert_eq!(app.update_item(), Some(("Update to ChronoDesk 999.0.0 now".to_owned(), true)));
+        app.update_step = UpdateStep::Downloading;
+        assert_eq!(app.update_item().map(|(_, enabled)| enabled), Some(false), "no second download");
+        app.update_step = UpdateStep::Failed;
+        assert_eq!(app.update_item(), Some(("Update failed: download ChronoDesk 999.0.0…".to_owned(), true)));
+        app.settings.update_available = None;
+        assert_eq!(app.update_item(), None);
+    }
+
+    /// A download that did not verify, or a setup that would not start, ends
+    /// in the fallback; nothing is run.
+    #[test]
+    fn an_update_that_fails_falls_back_to_the_release_page() {
+        let ctx = egui::Context::default();
+        let offer = Config { update_available: Some("999.0.0".to_owned()), ..Config::default() };
+        let mut app = ChronoApp::pinned(&ctx, offer, Local::now());
+        for result in [
+            Err(update::Refused::Signature),
+            Ok(std::env::temp_dir().join("chronodesk-test-no-such-setup.exe")),
+        ] {
+            let (tx, rx) = mpsc::channel();
+            tx.send(result).unwrap();
+            (app.update_step, app.update_download) = (UpdateStep::Downloading, Some(rx));
+            app.poll_update_download();
+            assert_eq!(app.update_step, UpdateStep::Failed);
+            assert!(app.update_download.is_none());
+        }
     }
 
     /// Test instances, like a script's, never go out to the network.

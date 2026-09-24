@@ -38,6 +38,31 @@ pub fn app_icon(size: u32, locked: bool) -> Rgba {
     Rgba { rgba, size }
 }
 
+/// A dot in the top-right corner, for the tray icon while an update waits: a
+/// clear colour with a dark rim, so it reads on a light or a dark taskbar.
+pub fn with_badge(mut icon: Rgba) -> Rgba {
+    let s = icon.size as f32;
+    let (cx, cy, r, rim) = (s * 0.78, s * 0.22, s * 0.16, s * 0.05);
+    for y in 0..icon.size {
+        for x in 0..icon.size {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let dist = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            let outer = coverage(dist - r - rim);
+            if outer <= 0.0 {
+                continue;
+            }
+            let inner = coverage(dist - r);
+            let i = ((y * icon.size + x) * 4) as usize;
+            let fill = [60.0, 200.0, 110.0];
+            for (c, f) in icon.rgba[i..i + 3].iter_mut().zip(fill) {
+                *c = (f * inner).round() as u8;
+            }
+            icon.rgba[i + 3] = (outer * 255.0).round() as u8;
+        }
+    }
+    icon
+}
+
 /// The same face as an `.ico` file, one image per size, for the places that
 /// want a file rather than pixels: the Start menu shortcut and the entry under
 /// Installed apps. Classic 32-bit DIB entries, which everything reads.
@@ -127,5 +152,20 @@ mod tests {
         let image = dib(&icon);
         assert_eq!(&image[40..56], &[11, 10, 9, 12, 15, 14, 13, 16, 3, 2, 1, 4, 7, 6, 5, 8]);
         assert_eq!(image.len(), 40 + 16 + 8, "and a two-row mask, four bytes a row");
+    }
+}
+
+#[cfg(test)]
+mod badge_preview {
+    /// Writes the tray icon with and without the update badge to target/shots
+    /// for a look: `cargo test badge_preview -- --ignored`.
+    #[test]
+    #[ignore = "writes files"]
+    fn badge_preview() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target").join("shots");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, icon) in [("tray", super::app_icon(64, false)), ("tray-update", super::with_badge(super::app_icon(64, false)))] {
+            image::save_buffer(dir.join(format!("{name}.png")), &icon.rgba, icon.size, icon.size, image::ColorType::Rgba8).unwrap();
+        }
     }
 }

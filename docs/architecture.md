@@ -176,10 +176,23 @@ answer costs one frame. A success is written down (`update_checked`, and
 an hour later, since an overlay that starts at login often looks before the
 network is up. Script and test instances never check.
 
-A newer version is offered at the top of the menu and in the tray tooltip,
-and the menu item opens the release page. The app does not download or run
-anything itself: the exe is unsigned, and "fetch from GitHub and execute" is
-exactly what a compromised account would exploit.
+A newer version is offered at the top of the menu, in the tray tooltip and as
+a green dot on the tray icon. Clicking it downloads the release's
+`SHA256SUMS.txt`, its signature and the setup (WinHTTP again, following the
+redirect to GitHub's file host, capped at 32 MB), and runs the setup with
+`--quiet` only if both check out. The setup then takes the usual upgrade
+path: it asks this overlay to quit, replaces the exe and starts the new one.
+
+The check is what makes that safe. The exe is not Authenticode-signed, so
+Windows would not stop a replaced file, and "fetch from GitHub and execute" is
+exactly what a compromised account would exploit. So each release's checksum
+list is signed with an ECDSA P-256 key that stays on the machine releases are
+made on (`scripts/sign-release.ps1`, DPAPI-sealed, never in CI), and the app
+carries the public half. CNG verifies the signature and computes the SHA-256,
+so no crypto crate is needed. A release that is unsigned or does not verify
+is thrown away and the menu item opens the release page instead, which is
+also all a portable copy does. Downloaded setups are removed on the next
+launch.
 
 There is no separate installer project that could drift out of step with the
 app, and no extra toolchain.

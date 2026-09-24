@@ -51,15 +51,11 @@ pub enum Command {
     ToggleAutostart,
     /// Shows the welcome card again.
     ShowWelcome,
-    /// Opens the page of the newer release the update check found.
-    OpenUpdate,
+    /// Installs the newer release the update check found, or opens its page
+    /// where it cannot be installed from here.
+    Update,
     ToggleUpdateCheck,
     Quit,
-}
-
-/// The menu's offer of a newer version.
-pub fn update_label(version: &str) -> String {
-    format!("Update available: ChronoDesk {version}…")
 }
 
 /// Menu item ids are plain strings; this is the single place they are decoded.
@@ -82,7 +78,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "ontop" => Command::ToggleOnTop,
         "autostart" => Command::ToggleAutostart,
         "welcome" => Command::ShowWelcome,
-        "update" => Command::OpenUpdate,
+        "update" => Command::Update,
         "checkupdates" => Command::ToggleUpdateCheck,
         "quit" => Command::Quit,
         _ => {
@@ -128,8 +124,9 @@ pub struct MenuState {
     pub autostart: bool,
     pub autostart_available: bool,
     pub check_updates: bool,
-    /// A newer version to offer at the top of the menu.
-    pub update_available: Option<String>,
+    /// The item at the top of the menu while an update is on offer, and
+    /// whether it can be clicked (not while one is downloading).
+    pub update: Option<(String, bool)>,
 }
 
 pub struct Tray {
@@ -306,7 +303,7 @@ impl Tray {
                     .with_menu(Box::new(menu.clone()))
                     .with_menu_on_left_click(false)
                     .with_tooltip("ChronoDesk")
-                    .with_icon(tray_icon(false))
+                    .with_icon(tray_icon(false, false))
                     .build()
                     .inspect_err(|err| eprintln!("ChronoDesk: tray icon unavailable: {err}"))
                     .ok()
@@ -416,9 +413,10 @@ impl Tray {
 
         // The offer heads the menu, above everything else, and is gone when
         // there is nothing to offer.
-        match (&state.update_available, self.update_shown) {
-            (Some(version), shown) => {
-                self.update.0.set_text(update_label(version));
+        match (&state.update, self.update_shown) {
+            (Some((label, enabled)), shown) => {
+                self.update.0.set_text(label);
+                self.update.0.set_enabled(*enabled);
                 if !shown {
                     let _ = self.menu.insert_items(&[&self.update.0, &self.update.1], 0);
                     self.update_shown = true;
@@ -432,17 +430,17 @@ impl Tray {
             (None, false) => {}
         }
 
-        let icon_state = (state.locked, state.update_available.clone());
+        let icon_state = (state.locked, state.update.as_ref().map(|(label, _)| label.clone()));
         if self.icon_state.as_ref() != Some(&icon_state) && let Some(tray) = &self.icon {
             let mut tooltip = if state.locked {
                 "ChronoDesk — locked (click icon to unlock)".to_owned()
             } else {
                 "ChronoDesk — click icon to lock".to_owned()
             };
-            if let Some(version) = &state.update_available {
-                tooltip.push_str(&format!("\nVersion {version} is available"));
+            if let Some((label, _)) = &state.update {
+                tooltip.push_str(&format!("\n{label} (right-click)"));
             }
-            let _ = tray.set_icon(Some(tray_icon(state.locked)));
+            let _ = tray.set_icon(Some(tray_icon(state.locked, state.update.is_some())));
             let _ = tray.set_tooltip(Some(tooltip));
             self.icon_state = Some(icon_state);
         }
@@ -480,8 +478,9 @@ impl Tray {
     }
 }
 
-fn tray_icon(locked: bool) -> Icon {
+fn tray_icon(locked: bool, update: bool) -> Icon {
     let img = icon::app_icon(32, locked);
+    let img = if update { icon::with_badge(img) } else { img };
     Icon::from_rgba(img.rgba, img.size, img.size).expect("valid icon")
 }
 
