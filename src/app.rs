@@ -987,9 +987,10 @@ impl eframe::App for ChronoApp {
         // Translucent hardware dressing — unlit diodes, sockets, hairlines —
         // keys as a tint, so none of it is drawn over a chroma key.
         let dressing = !s.chroma;
-        // Unlit segments under the digital face, at the ghost alpha whatever
-        // the readout colour has been dimmed to.
-        let ghost = (dressing && s.font.has_ghost()).then(|| theme.ghost(theme.color.text));
+        // Unlit segments under the digital face, in the colour of the digits
+        // drawn over them (a red stopwatch has red diodes, not green ones) and
+        // at the ghost alpha whatever that colour has been dimmed to.
+        let ghost_of = |color: Color32| (dressing && s.font.has_ghost()).then(|| theme.ghost(color));
         if let Some(lit) = readout.ring {
             paint_ring(&painter, rect, &m, theme, lit, halo, dressing);
         }
@@ -998,7 +999,7 @@ impl eframe::App for ChronoApp {
         let caption_color = match &readout.scene {
             Scene::Line { main, color } => {
                 let origin = pos2(inner.center().x - scene_size.x / 2.0, scene_top);
-                paint_readout(&painter, origin, main, self.layout.glyphs(), *color, halo, ghost, theme);
+                paint_readout(&painter, origin, main, self.layout.glyphs(), *color, halo, ghost_of(*color), theme);
                 // A plain readout colour dims with its caption; an alarm does not.
                 let plain = *color == theme.color.text || *color == theme.color.secondary;
                 if plain && dim_captions { theme.dim_caption(*color) } else { *color }
@@ -1006,7 +1007,7 @@ impl eframe::App for ChronoApp {
             Scene::Board(rows) => {
                 let geo = geometry.expect("measured with the board");
                 let origin = pos2(inner.center().x - geo.size.x / 2.0, scene_top);
-                let style = board::Style { halo, dim_closed: dim_captions, dressing, ghost };
+                let style = board::Style { halo, dim_closed: dim_captions, dressing, ghost: ghost_of(theme.color.text) };
                 board::paint(&painter, origin, rows, &geo, &mut self.layout, theme, style, &faces);
                 if dim_captions { theme.dim_caption(theme.color.text) } else { theme.color.text }
             }
