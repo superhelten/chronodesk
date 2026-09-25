@@ -80,6 +80,11 @@ An idle clock draws one frame per second and a paused stopwatch draws none.
 Timed wake-ups on Windows can fire up to a timer tick early, so the app aims
 25 ms past the boundary rather than spinning until it arrives.
 
+A launch spends nearly all of its time before the first frame in eframe
+creating the window and its OpenGL context, which is mostly the graphics
+driver loading. Reading the config and laying out the first frame are a small
+fraction of it; `scripts/startup-time.ps1` measures each step.
+
 The window is sized to its content. Columns on the market board are sized for
 the widest value they can ever hold, so the window does not resize as the
 clocks tick.

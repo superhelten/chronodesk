@@ -161,6 +161,7 @@ and leaves an overlay you already have running alone.
 | `welcome-test.ps1` | the welcome card on first launch |
 | `resume-test.ps1` | a running stopwatch or timer survives the app being killed |
 | `chime-test.ps1` | the timer chime (counted, not played) |
+| `startup-time.ps1` | how long a launch takes to put its first frame up |
 
 Run them with PowerShell 7 (`pwsh`).
 

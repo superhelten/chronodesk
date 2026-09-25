@@ -34,6 +34,7 @@ mod shots;
 use eframe::egui;
 
 fn main() -> eframe::Result {
+    instrument::reached(instrument::Milestone::Main);
     // Before anything is read or shown: a second launch against the same config
     // file would fight the first over it, so it steps aside.
     let config_path = config::config_path();
@@ -70,6 +71,7 @@ fn main() -> eframe::Result {
     // Only a first guess: the OS converts points with the scale of whichever
     // monitor the window first comes up on. Once it runs, the placement check
     // puts it on the exact pixel from `window_px`.
+    instrument::reached(instrument::Milestone::Config);
     let position = loaded.config.window.or(loaded.config.window_px).map_or([80.0, 80.0], |w| [w.x, w.y]);
 
     // A test instance belongs to a script, not to whoever is at the keyboard,

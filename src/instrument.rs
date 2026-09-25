@@ -93,6 +93,132 @@ pub fn requested(args: &[String]) -> bool {
     cfg!(feature = "instrument") && args.iter().any(|arg| arg == "--instrument")
 }
 
+/// Points on the way from launch to the first frame on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "instrument"), allow(dead_code, reason = "only instrument builds record them"))]
+pub enum Milestone {
+    /// `main` is entered: the loader and the runtime are done.
+    Main,
+    /// The settings are read, just before the window is asked for.
+    Config,
+    /// eframe has a window and a GL context, and hands them to the app.
+    App,
+    /// The first frame is laid out and painted.
+    FirstFrame,
+}
+
+impl Milestone {
+    const ALL: [Self; 4] = [Self::Main, Self::Config, Self::App, Self::FirstFrame];
+
+    #[cfg_attr(not(feature = "instrument"), allow(dead_code, reason = "only instrument builds report them"))]
+    fn id(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Config => "config",
+            Self::App => "app",
+            Self::FirstFrame => "first_frame",
+        }
+    }
+}
+
+/// Notes that `milestone` has been reached. Only instrument builds keep the
+/// time; everywhere else this compiles to nothing.
+pub fn reached(milestone: Milestone) {
+    #[cfg(feature = "instrument")]
+    startup::reached(milestone);
+    #[cfg(not(feature = "instrument"))]
+    let _ = milestone;
+}
+
+/// Each milestone as milliseconds since the process was created, the way
+/// `startup` reports them; a milestone not reached yet is left out.
+#[cfg_attr(not(feature = "instrument"), allow(dead_code, reason = "only instrument builds report them"))]
+fn startup_report(since_creation: impl Fn(Milestone) -> Option<Duration>) -> String {
+    Milestone::ALL
+        .into_iter()
+        .filter_map(|m| since_creation(m).map(|d| format!("{}_ms={:.1}", m.id(), d.as_secs_f64() * 1000.0)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(feature = "instrument")]
+mod startup {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use super::Milestone;
+
+    struct Marks {
+        /// How old the process was at the first milestone: an `Instant`
+        /// cannot be compared with the OS's creation time, so that one
+        /// reading ties the two clocks together.
+        age: Option<Duration>,
+        reached: Vec<(Milestone, Instant)>,
+    }
+
+    static MARKS: Mutex<Marks> = Mutex::new(Marks { age: None, reached: Vec::new() });
+
+    pub fn reached(milestone: Milestone) {
+        let at = Instant::now();
+        let mut marks = MARKS.lock().expect("startup marks");
+        if marks.reached.is_empty() {
+            marks.age = process_age();
+        }
+        if !marks.reached.iter().any(|(m, _)| *m == milestone) {
+            marks.reached.push((milestone, at));
+        }
+    }
+
+    pub fn report() -> String {
+        let marks = MARKS.lock().expect("startup marks");
+        let (Some(age), Some(&(_, first))) = (marks.age, marks.reached.first()) else {
+            return "err no milestones".to_owned();
+        };
+        super::startup_report(|m| {
+            marks.reached.iter().find(|(x, _)| *x == m).map(|&(_, at)| age + at.duration_since(first))
+        })
+    }
+
+    /// How long ago the OS created this process, which includes what the
+    /// loader did before any of our code ran.
+    #[cfg(windows)]
+    fn process_age() -> Option<Duration> {
+        #[repr(C)]
+        #[derive(Default)]
+        struct FileTime {
+            low: u32,
+            high: u32,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> isize;
+            fn GetProcessTimes(
+                process: isize,
+                creation: *mut FileTime,
+                exit: *mut FileTime,
+                kernel: *mut FileTime,
+                user: *mut FileTime,
+            ) -> i32;
+            fn GetSystemTimePreciseAsFileTime(now: *mut FileTime);
+        }
+        let ticks = |t: &FileTime| (u64::from(t.high) << 32) | u64::from(t.low);
+        let (mut created, mut exit, mut kernel, mut user, mut now) = Default::default();
+        // SAFETY: plain out-parameters on the pseudo-handle of this process.
+        let ok = unsafe {
+            let ok = GetProcessTimes(GetCurrentProcess(), &mut created, &mut exit, &mut kernel, &mut user);
+            GetSystemTimePreciseAsFileTime(&mut now);
+            ok
+        };
+        // File times count 100 ns units.
+        (ok != 0).then(|| Duration::from_nanos(ticks(&now).saturating_sub(ticks(&created)) * 100))
+    }
+
+    #[cfg(not(windows))]
+    fn process_age() -> Option<Duration> {
+        None
+    }
+}
+
 #[cfg(feature = "instrument")]
 mod imp {
     use std::io::{BufRead as _, BufReader, Write as _};
@@ -325,6 +451,8 @@ mod imp {
                 },
                 _ => "err usage: place <x> <y>".to_owned(),
             },
+            // Milliseconds from process creation to each point of the launch.
+            "startup" => super::startup::report(),
             "placement" => {
                 if shared.placement.is_empty() {
                     "err not evaluated yet".to_owned()
@@ -450,6 +578,17 @@ mod tests {
         let t = Telemetry { layout_rebuilds: 3, ..Telemetry::default() };
         let report = t.report(Duration::from_secs(1));
         assert!(report.contains("rebuilds=3"), "{report}");
+    }
+
+    #[test]
+    fn the_startup_report_lists_the_milestones_reached_in_launch_order() {
+        let at = |m: Milestone| match m {
+            Milestone::Main => Some(Duration::from_micros(12_340)),
+            Milestone::Config => Some(Duration::from_millis(15)),
+            Milestone::App => None,
+            Milestone::FirstFrame => Some(Duration::from_millis(210)),
+        };
+        assert_eq!(startup_report(at), "main_ms=12.3 config_ms=15.0 first_frame_ms=210.0");
     }
 
     #[test]

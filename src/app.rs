@@ -19,7 +19,7 @@ use crate::ring;
 use crate::config::{self, Config};
 use crate::digital;
 use crate::install;
-use crate::instrument::{Cause, Instrument};
+use crate::instrument::{self, Cause, Instrument, Milestone};
 use crate::layout::{DerivedLayout, Font, LayoutKey, Metrics};
 use crate::market::{self, BoardStyle, Market};
 use crate::matrix;
@@ -253,6 +253,7 @@ impl ChronoApp {
         loaded: config::Loaded,
         inbox: Option<signal::Inbox>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        instrument::reached(Milestone::App);
         for warning in &loaded.warnings {
             eprintln!("ChronoDesk: config: {warning}");
         }
@@ -1431,6 +1432,8 @@ impl eframe::App for ChronoApp {
                 self.countdown.remaining(now).as_millis(),
             )
         });
+
+        instrument::reached(Milestone::FirstFrame);
 
         // Last: this blocks in a native modal loop until the menu closes.
         if background.secondary_clicked() {
