@@ -82,7 +82,8 @@ plays three times; *Restart* runs it again from the top. A running stopwatch or 
 Under *Appearance* you can change the size, the face (typeface, seven-segment or dot matrix), the
 colours, the 12/24-hour format, the date line, the seconds ring and night mode, which dims the
 readout on a schedule. *Chroma key background* fills the window with pure green for use as a
-source in streaming software.
+source in streaming software. Over the key the green presets are drawn in white, because a
+keyer would remove the lime along with the background.
 
 ### Market board
 

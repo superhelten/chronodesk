@@ -149,6 +149,14 @@ impl Theme {
         c.ring_marker = if palette == Palette::Red { led_yellow } else { led_red };
         if chroma {
             c.open = c.text;
+            // The lime of the green presets is as good as the key colour to a
+            // keyer, so over the key it gives way to the plain white text.
+            let white = Colors::default().text;
+            for color in [&mut c.text, &mut c.secondary, &mut c.alert, &mut c.open, &mut c.ring_marker] {
+                if key_distance(*color, c.chroma) <= KEYER_REACH {
+                    *color = white;
+                }
+            }
         }
         if let Some(dim) = night_dim.filter(|d| *d < 1.0) {
             let fade = |color: Color32| fade(color, dim, chroma);
@@ -203,6 +211,23 @@ pub fn fade(color: Color32, factor: f32, chroma: bool) -> Color32 {
     } else {
         color.gamma_multiply(factor)
     }
+}
+
+/// How far from the key colour a keyer still removes a pixel, as a distance
+/// in the chroma plane: OBS's default similarity (0.40) plus its default
+/// smoothness (0.08), past which a pixel is left fully opaque.
+const KEYER_REACH: f32 = 0.48;
+
+/// The distance between two colours the way a chroma keyer measures it:
+/// brightness thrown away, only Cb/Cr compared (BT.709, as in OBS's filter).
+/// Any grey sits at the same distance from a green key, however dark.
+fn key_distance(color: Color32, key: Color32) -> f32 {
+    let cbcr = |c: Color32| {
+        let [r, g, b, _] = c.to_normalized_gamma_f32();
+        (-0.100_644 * r - 0.338_572 * g + 0.439_216 * b, 0.439_216 * r - 0.398_942 * g - 0.040_274 * b)
+    };
+    let ((cb, cr), (kb, kr)) = (cbcr(color), cbcr(key));
+    (cb - kb).hypot(cr - kr)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -516,6 +541,43 @@ mod tests {
         assert_ne!(plain.color.open, plain.color.text);
         assert_eq!(keyed.color.open, keyed.color.text);
         assert_eq!(keyed.color.chroma, plain.color.chroma);
+    }
+
+    /// The lime LED green sits well inside a default keyer's reach, which
+    /// is what makes the next test mean something.
+    #[test]
+    fn the_keyer_takes_lime_and_leaves_white() {
+        let key = Colors::default().chroma;
+        assert!(key_distance(Color32::from_rgb(140, 250, 70), key) < KEYER_REACH);
+        assert!(key_distance(Color32::from_rgb(88, 214, 122), key) < KEYER_REACH);
+        assert!(key_distance(Colors::default().text, key) > KEYER_REACH);
+        assert!(key_distance(Color32::from_rgb(40, 40, 40), key) > KEYER_REACH, "grey is grey at any brightness");
+    }
+
+    #[test]
+    fn under_chroma_no_palette_draws_what_the_keyer_removes() {
+        let key = Colors::default().chroma;
+        for palette in Palette::ALL {
+            for dim in [None, Some(0.6)] {
+                let c = Theme::resolve(palette, dim, true).color;
+                for (name, color) in [
+                    ("text", c.text),
+                    ("secondary", c.secondary),
+                    ("alert", c.alert),
+                    ("open", c.open),
+                    ("label", c.label),
+                    ("ring_marker", c.ring_marker),
+                ] {
+                    let d = key_distance(color, key);
+                    assert!(d > KEYER_REACH, "{palette:?} {dim:?}: {name} {color:?} is {d:.3} from the key");
+                }
+            }
+        }
+        // Off the key, the green palettes stay green.
+        assert_eq!(Theme::resolve(Palette::Green, None, false).color.text, Color32::from_rgb(140, 250, 70));
+        // Only what the keyer would take changes: Studio's red counters stay red.
+        let studio = Theme::resolve(Palette::Studio, None, true).color;
+        assert_eq!(studio.secondary, Theme::resolve(Palette::Studio, None, false).color.secondary);
     }
 
     #[test]
