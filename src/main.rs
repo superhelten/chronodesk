@@ -27,6 +27,7 @@ mod tray;
 mod tz;
 mod update;
 mod welcome;
+mod world;
 
 #[cfg(test)]
 mod shots;

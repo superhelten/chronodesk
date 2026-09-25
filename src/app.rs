@@ -458,6 +458,7 @@ impl eframe::App for ChronoApp {
                 clock_format: s.clock_format,
                 show_seconds: s.show_seconds,
                 show_date: s.show_date,
+                second_zone: s.second_zone,
                 timer_minutes: s.timer_minutes,
             };
             content_width = self.line_width.hold(shape, content_width);

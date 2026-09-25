@@ -80,6 +80,7 @@ impl ChronoApp {
             Command::ToggleSeconds => s.show_seconds = !s.show_seconds,
             Command::ToggleClockFormat => s.clock_format = s.clock_format.toggled(),
             Command::ToggleDate => s.show_date = !s.show_date,
+            Command::SetSecondZone(zone) => s.second_zone = zone,
             Command::SetPalette(palette) => s.palette = palette,
             Command::SetNight(night) => s.night = night,
             Command::ToggleOnTop => {
@@ -194,6 +195,7 @@ impl ChronoApp {
             show_seconds: s.show_seconds,
             clock_format: s.clock_format,
             show_date: s.show_date,
+            second_zone: s.second_zone,
             palette: s.palette,
             night: s.night,
             markets: s.markets.clone(),

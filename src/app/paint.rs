@@ -12,6 +12,7 @@ use crate::text::{display_family, label_family, spaced};
 use crate::theme::Theme;
 use crate::tray::Command;
 use crate::welcome;
+use crate::world::City;
 
 use super::Mode;
 
@@ -170,6 +171,7 @@ pub(super) struct LineShape {
     pub(super) clock_format: ClockFormat,
     pub(super) show_seconds: bool,
     pub(super) show_date: bool,
+    pub(super) second_zone: Option<City>,
     pub(super) timer_minutes: u64,
 }
 

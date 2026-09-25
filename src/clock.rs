@@ -3,10 +3,13 @@
 
 use std::time::Duration;
 
-use chrono::{DateTime, Local, Timelike as _};
+use std::fmt::Display;
+
+use chrono::{DateTime, NaiveDateTime, TimeZone, Timelike as _};
 use serde::{Deserialize, Serialize};
 
 use crate::app::serde_by_id;
+use crate::world::City;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClockFormat {
@@ -44,6 +47,8 @@ pub struct ClockStyle {
     pub format: ClockFormat,
     pub show_seconds: bool,
     pub show_date: bool,
+    /// A second time zone, shown after the date.
+    pub zone: Option<City>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +62,10 @@ pub struct ClockReadout {
 
 /// Formats `t` for the overlay. `main` holds only readout characters (digits
 /// and colons) so the glyph cache covers it; AM/PM goes in the caption.
-pub fn clock_readout(t: DateTime<Local>, style: ClockStyle) -> ClockReadout {
+pub fn clock_readout<Tz: TimeZone>(t: DateTime<Tz>, style: ClockStyle) -> ClockReadout
+where
+    Tz::Offset: Display,
+{
     let main = match (style.format, style.show_seconds) {
         (ClockFormat::H24, true) => t.format("%H:%M:%S"),
         (ClockFormat::H24, false) => t.format("%H:%M"),
@@ -73,6 +81,9 @@ pub fn clock_readout(t: DateTime<Local>, style: ClockStyle) -> ClockReadout {
     if style.show_date {
         parts.push(t.format("%a %-d %b").to_string());
     }
+    if let Some(city) = style.zone {
+        parts.push(elsewhere(city, t.naive_utc(), t.naive_local(), style.format));
+    }
     let caption = parts.join(" · ").to_uppercase();
 
     let nanos_into_second = u64::from(t.nanosecond() % 1_000_000_000);
@@ -85,10 +96,28 @@ pub fn clock_readout(t: DateTime<Local>, style: ClockStyle) -> ClockReadout {
     ClockReadout { main, caption, until_change: Duration::from_nanos(until_change) }
 }
 
+/// The time in `city`, minutes only, with a day marker when its date is not
+/// the local one: "TOKYO 03:30 +1".
+fn elsewhere(city: City, utc: NaiveDateTime, local: NaiveDateTime, format: ClockFormat) -> String {
+    let there = city.zone().to_local(utc);
+    let time = match format {
+        ClockFormat::H24 => there.format("%H:%M"),
+        ClockFormat::H12 => there.format("%-I:%M %p"),
+    };
+    let mut text = format!("{} {time}", city.label());
+    let days = (there.date() - local.date()).num_days();
+    if days != 0 {
+        text.push_str(&format!(" {days:+}"));
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone as _;
+    use chrono::{FixedOffset, Local};
+
+    use crate::world::City;
 
     fn at(h: u32, m: u32, s: u32) -> DateTime<Local> {
         // September: safely outside any DST transition.
@@ -96,7 +125,17 @@ mod tests {
     }
 
     fn style(format: ClockFormat, show_seconds: bool, show_date: bool) -> ClockStyle {
-        ClockStyle { format, show_seconds, show_date }
+        ClockStyle { format, show_seconds, show_date, zone: None }
+    }
+
+    /// Local time two hours ahead of UTC, as in central Europe in summer, pinned
+    /// so the other zone's time does not depend on the machine's.
+    fn cest(d: u32, h: u32, m: u32) -> DateTime<FixedOffset> {
+        FixedOffset::east_opt(2 * 3600).unwrap().with_ymd_and_hms(2026, 9, d, h, m, 0).unwrap()
+    }
+
+    fn with_zone(style: ClockStyle, city: City) -> ClockStyle {
+        ClockStyle { zone: Some(city), ..style }
     }
 
     const H24: ClockFormat = ClockFormat::H24;
@@ -170,5 +209,47 @@ mod tests {
         let next = clock_readout(at(23, 59, 59) + chrono::Duration::seconds(1), style(H12, true, true));
         assert_eq!(next.main, "12:00:00");
         assert_eq!(next.caption, "AM · THU 17 SEP", "the date must roll over with the clock");
+    }
+
+    #[test]
+    fn a_second_zone_follows_the_date_in_the_caption() {
+        let r = clock_readout(cest(16, 18, 49), with_zone(style(H24, false, true), City::Utc));
+        assert_eq!(r.main, "18:49", "local time stays the readout");
+        assert_eq!(r.caption, "WED 16 SEP · UTC 16:49");
+    }
+
+    #[test]
+    fn a_second_zone_a_day_ahead_or_behind_says_so() {
+        let tokyo = clock_readout(cest(16, 20, 30), with_zone(style(H24, false, false), City::Tokyo));
+        assert_eq!(tokyo.caption, "TOKYO 03:30 +1");
+        let la = clock_readout(cest(17, 1, 0), with_zone(style(H24, false, false), City::LosAngeles));
+        assert_eq!(la.caption, "LOS ANGELES 16:00 -1");
+    }
+
+    #[test]
+    fn a_second_zone_in_twelve_hour_mode_carries_its_own_period() {
+        let r = clock_readout(cest(16, 20, 30), with_zone(style(H12, true, true), City::Tokyo));
+        assert_eq!(r.main, "8:30:00");
+        assert_eq!(r.caption, "PM · WED 16 SEP · TOKYO 3:30 AM +1");
+    }
+
+    /// Offsets are whole half hours, so the other zone turns its minute
+    /// when the local clock does and needs no wake of its own.
+    #[test]
+    fn a_second_zone_changes_nothing_about_when_to_draw_next() {
+        let t = cest(16, 18, 49).with_second(37).unwrap();
+        for show_seconds in [true, false] {
+            let plain = clock_readout(t, style(H24, show_seconds, true)).until_change;
+            let zoned = clock_readout(t, with_zone(style(H24, show_seconds, true), City::Mumbai)).until_change;
+            assert_eq!(plain, zoned);
+        }
+        assert_eq!(clock_readout(t, with_zone(style(H24, false, false), City::Mumbai)).caption, "MUMBAI 22:19");
+    }
+
+    #[test]
+    fn a_second_zone_observes_its_own_daylight_saving() {
+        let winter = FixedOffset::east_opt(3600).unwrap().with_ymd_and_hms(2026, 1, 15, 15, 0, 0).unwrap();
+        assert_eq!(clock_readout(winter, with_zone(style(H24, false, false), City::NewYork)).caption, "NEW YORK 09:00");
+        assert_eq!(clock_readout(cest(16, 15, 0), with_zone(style(H24, false, false), City::NewYork)).caption, "NEW YORK 09:00");
     }
 }

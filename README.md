@@ -88,7 +88,8 @@ when it falls due, it does not ring late.
 
 Under *Appearance* you can change the size, the face (typeface, seven-segment or dot matrix), the
 colours, the 12/24-hour format, the date line, the seconds ring and night mode, which dims the
-readout on a schedule. *Chroma key background* fills the window with pure green for use as a
+readout on a schedule. *Second time zone* adds another city's time after the date, such as
+"TOKYO 03:30 +1", marked when its date differs from yours. *Chroma key background* fills the window with pure green for use as a
 source in streaming software. Over the key the green presets are drawn in white, because a
 keyer would remove the lime along with the background.
 
@@ -121,6 +122,7 @@ file. If a value is invalid, that one setting falls back to its default and the 
 | `palette` | `"default"`, `"warm"`, `"cool"`, `"amber"`, `"green"`, `"red"`, `"yellow"`, `"studio"` |
 | `clock_format` | `"24h"`, `"12h"` |
 | `show_seconds`, `show_date`, `seconds_ring` | `true` / `false` |
+| `second_zone` | `None`, or `Some("tokyo")` with one of `"utc"`, `"los-angeles"`, `"chicago"`, `"new-york"`, `"sao-paulo"`, `"london"`, `"paris"`, `"oslo"`, `"dubai"`, `"mumbai"`, `"singapore"`, `"hong-kong"`, `"tokyo"`, `"sydney"` |
 | `backdrop`, `chroma`, `text_outline`, `always_on_top` | `true` / `false` |
 | `timer_minutes` | 1 to 1440 |
 | `timer_sound` | `true` / `false` |

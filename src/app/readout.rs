@@ -51,7 +51,12 @@ impl ChronoApp {
         };
         match s.mode {
             Mode::Clock => {
-                let style = ClockStyle { format: s.clock_format, show_seconds: s.show_seconds, show_date: s.show_date };
+                let style = ClockStyle {
+                    format: s.clock_format,
+                    show_seconds: s.show_seconds,
+                    show_date: s.show_date,
+                    zone: s.second_zone,
+                };
                 let clock = clock_readout(local, style);
                 // The ring moves every second even when the digits do not.
                 let mut next = clock.until_change;

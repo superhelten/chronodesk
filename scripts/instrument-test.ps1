@@ -159,11 +159,12 @@ try {
 
   # --- G: appearance changes never re-measure text ---------------------------
   Assert-Drawing 'G: appearance'
-  # Colours, night mode, 12-hour clock and the date line are all outside the
-  # layout key, so the rebuild count must not move. Size is the one thing
-  # that does rebuild, and it is checked separately to prove the counter works.
+  # Colours, night mode, 12-hour clock, the date line and a second time zone
+  # are all outside the layout key, so the rebuild count must not move. Size
+  # is the one thing that does rebuild, and it is checked separately to prove
+  # the counter works.
   $before = Field (Send "stats") 'rebuilds'
-  foreach ($c in 'palette:warm', 'palette:cool', 'palette:amber', 'night:on', 'night:auto', '12h', 'date') {
+  foreach ($c in 'palette:warm', 'palette:cool', 'palette:amber', 'night:on', 'night:auto', '12h', 'date', 'zone:tokyo') {
     Send "cmd $c" | Out-Null
     Start-Sleep -Milliseconds 300
   }
@@ -176,7 +177,7 @@ try {
   Send "stats reset" | Out-Null
   Start-Sleep 12
   $clock12 = Send "stats"
-  $results += Check "appearance: 12h clock still ~1 fps" ((Field $clock12 'fps') -ge 0.95 -and (Field $clock12 'fps') -le 1.2) $clock12
+  $results += Check "appearance: 12h clock with a second zone still ~1 fps" ((Field $clock12 'fps') -ge 0.95 -and (Field $clock12 'fps') -le 1.2) $clock12
   Send "cmd size:large" | Out-Null
   Start-Sleep 1
   $large = Field (Send "stats") 'rebuilds'
@@ -185,7 +186,7 @@ try {
   Start-Sleep 1
 
   # --- I: the digital face is one rebuild, then as cheap as the typeface ------
-  foreach ($c in 'night:off', 'palette:default', '12h', 'date') { Send "cmd $c" | Out-Null }
+  foreach ($c in 'night:off', 'palette:default', '12h', 'date', 'zone:none') { Send "cmd $c" | Out-Null }
   Start-Sleep 1
   $beforeFont = Field (Send "stats") 'rebuilds'
   Send "cmd digital" | Out-Null

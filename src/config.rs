@@ -32,6 +32,7 @@ use crate::market::{Labels, Market};
 use crate::night::{NightMode, TimeOfDay};
 use crate::theme::{self, Palette};
 use crate::timer::Saved;
+use crate::world::City;
 
 /// Bump when the meaning of a field changes; add a migration step for it.
 /// Schema 0 is eframe's own persistence file, handled by [`migrate_from_eframe`].
@@ -64,6 +65,9 @@ pub struct Config {
     pub clock_format: ClockFormat,
     /// Date line under the clock.
     pub show_date: bool,
+    /// Another city's time after the date, by id (`"tokyo"`); `None` for
+    /// local time only.
+    pub second_zone: Option<City>,
     pub palette: Palette,
     pub night: NightMode,
     /// Nightly window for `night: "auto"`, as `"HH:MM"`; `from` later than
@@ -129,6 +133,7 @@ impl Default for Config {
             text_outline: true,
             clock_format: ClockFormat::H24,
             show_date: true,
+            second_zone: None,
             palette: Palette::Default,
             night: NightMode::Off,
             night_from: TimeOfDay::new(22, 0).expect("valid"),
@@ -322,6 +327,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "text_outline", &mut config.text_outline, &mut warnings);
     field(&mut fields, "clock_format", &mut config.clock_format, &mut warnings);
     field(&mut fields, "show_date", &mut config.show_date, &mut warnings);
+    field(&mut fields, "second_zone", &mut config.second_zone, &mut warnings);
     field(&mut fields, "palette", &mut config.palette, &mut warnings);
     field(&mut fields, "night", &mut config.night, &mut warnings);
     field(&mut fields, "night_from", &mut config.night_from, &mut warnings);
@@ -1042,6 +1048,25 @@ mod tests {
         assert_eq!((loaded.config.alarm_at, loaded.config.alarm_due), (TimeOfDay::new(7, 0).unwrap(), None));
         assert_eq!(loaded.config.timer_minutes, 5, "the rest survives");
         assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn the_second_zone_is_off_and_round_trips_by_id() {
+        let dir = Dir::new("second_zone");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        assert_eq!(load(&path).config.second_zone, None);
+
+        let config = Config { second_zone: Some(City::HongKong), ..Config::returning() };
+        save(&path, &config).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"hong-kong\""), "hand-editable");
+        assert_eq!(load(&path).config, config);
+
+        write(&path, "(schema_version:1,second_zone:Some(\"atlantis\"),timer_minutes:5)");
+        let loaded = load(&path);
+        assert_eq!(loaded.config.second_zone, None);
+        assert_eq!(loaded.config.timer_minutes, 5, "the rest survives");
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
     }
 
     #[test]

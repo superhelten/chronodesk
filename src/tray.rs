@@ -18,6 +18,7 @@ use crate::layout::Font;
 use crate::market::{Labels, Market};
 use crate::night::{NightMode, TimeOfDay};
 use crate::theme::Palette;
+use crate::world::City;
 
 pub const TIMER_PRESETS: [u64; 9] = [1, 3, 5, 10, 15, 25, 30, 45, 60];
 /// The alarm's minutes in the menu; the config file takes any minute.
@@ -37,6 +38,8 @@ pub enum Command {
     ToggleSeconds,
     ToggleClockFormat,
     ToggleDate,
+    /// Shows another city's time after the date, or none.
+    SetSecondZone(Option<City>),
     /// The old two-way typeface / seven-segment switch.
     ToggleFont,
     SetFont(Font),
@@ -102,6 +105,8 @@ pub fn parse_command(id: &str) -> Option<Command> {
                 "palette" => Command::SetPalette(Palette::ALL.into_iter().find(|p| p.id() == value)?),
                 "night" => Command::SetNight(NightMode::ALL.into_iter().find(|n| n.id() == value)?),
                 "market" => Command::ToggleMarket(Market::ALL.into_iter().find(|m| m.id() == value)?),
+                "zone" if value == "none" => Command::SetSecondZone(None),
+                "zone" => Command::SetSecondZone(Some(City::from_id(value)?)),
                 "alarm" => Command::SetAlarm(TimeOfDay::parse(value)?),
                 "alarmhour" => Command::SetAlarmHour(value.parse().ok().filter(|h| *h < 24)?),
                 "alarmmin" => Command::SetAlarmMinute(value.parse().ok().filter(|m| *m < 60)?),
@@ -127,6 +132,7 @@ pub struct MenuState {
     pub show_seconds: bool,
     pub clock_format: ClockFormat,
     pub show_date: bool,
+    pub second_zone: Option<City>,
     pub palette: Palette,
     pub night: NightMode,
     pub markets: Vec<Market>,
@@ -173,6 +179,8 @@ pub struct Tray {
     seconds: CheckMenuItem,
     twelve_hour: CheckMenuItem,
     date: CheckMenuItem,
+    /// "None" first, then every city.
+    zones: Vec<(Option<City>, CheckMenuItem)>,
     on_top: CheckMenuItem,
     autostart: CheckMenuItem,
     check_updates: CheckMenuItem,
@@ -260,6 +268,9 @@ impl Tray {
         let seconds = check("seconds", "Show seconds");
         let twelve_hour = check("12h", "12-hour clock");
         let date = check("date", "Show date");
+        let zones: Vec<_> = std::iter::once((None, check("zone:none", "None")))
+            .chain(City::ALL.into_iter().map(|c| (Some(c), check(&format!("zone:{}", c.id()), c.label()))))
+            .collect();
         let on_top = check("ontop", "Always on top");
         let autostart = check("autostart", "Start with Windows");
         let check_updates = check("checkupdates", "Check for updates");
@@ -282,6 +293,10 @@ impl Tray {
         let face_menu = Submenu::with_items("Face", true, &face_refs).expect("face submenu");
         let palette_menu = Submenu::with_items("Colours", true, &palette_refs).expect("palette submenu");
         let night_menu = Submenu::with_items("Night mode", true, &night_refs).expect("night submenu");
+        let z1 = PredefinedMenuItem::separator();
+        let mut zone_refs: Vec<&dyn IsMenuItem> = zones.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        zone_refs.insert(1, &z1);
+        let zone_menu = Submenu::with_items("Second time zone", true, &zone_refs).expect("zone submenu");
         let hour_refs: Vec<&dyn IsMenuItem> = alarm_hours.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let minute_refs: Vec<&dyn IsMenuItem> = alarm_minutes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let hour_menu = Submenu::with_items("Hour", true, &hour_refs).expect("alarm hour submenu");
@@ -295,7 +310,7 @@ impl Tray {
         // top level stays the short list it was.
         let sep = PredefinedMenuItem::separator;
         let a1 = sep();
-        let appearance_items: [&dyn IsMenuItem; 12] = [
+        let appearance_items: [&dyn IsMenuItem; 13] = [
             &size_menu,
             &face_menu,
             &palette_menu,
@@ -308,6 +323,7 @@ impl Tray {
             &seconds,
             &twelve_hour,
             &date,
+            &zone_menu,
         ];
         let appearance_menu = Submenu::with_items("Appearance", true, &appearance_items).expect("appearance submenu");
 
@@ -373,6 +389,7 @@ impl Tray {
             seconds,
             twelve_hour,
             date,
+            zones,
             on_top,
             autostart,
             check_updates,
@@ -445,6 +462,9 @@ impl Tray {
         }
         self.twelve_hour.set_checked(state.clock_format == ClockFormat::H12);
         self.date.set_checked(state.show_date);
+        for (zone, item) in &self.zones {
+            item.set_checked(*zone == state.second_zone);
+        }
         self.backdrop.set_checked(state.backdrop);
         self.outline.set_checked(state.text_outline);
         // An outline under a backdrop would be invisible anyway, and under a
@@ -564,6 +584,11 @@ mod tests {
         }
         assert_eq!(parse_command("font:serif"), None);
         assert_eq!(parse_command("date"), Some(Command::ToggleDate));
+        assert_eq!(parse_command("zone:none"), Some(Command::SetSecondZone(None)));
+        for city in City::ALL {
+            assert_eq!(parse_command(&format!("zone:{}", city.id())), Some(Command::SetSecondZone(Some(city))));
+        }
+        assert_eq!(parse_command("zone:atlantis"), None);
         for palette in Palette::ALL {
             assert_eq!(parse_command(&format!("palette:{}", palette.id())), Some(Command::SetPalette(palette)));
         }
