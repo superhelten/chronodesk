@@ -60,6 +60,8 @@ pub struct Config {
     pub chroma: bool,
     pub show_seconds: bool,
     pub always_on_top: bool,
+    /// Ctrl+Alt+Shift with the overlay's keys, from any window (see `hotkeys.rs`).
+    pub hotkeys: bool,
     /// Dark outline around the text, for legibility without a backdrop.
     pub text_outline: bool,
     pub clock_format: ClockFormat,
@@ -135,6 +137,7 @@ impl Default for Config {
             chroma: false,
             show_seconds: true,
             always_on_top: true,
+            hotkeys: true,
             text_outline: true,
             clock_format: ClockFormat::H24,
             show_date: true,
@@ -331,6 +334,7 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "chroma", &mut config.chroma, &mut warnings);
     field(&mut fields, "show_seconds", &mut config.show_seconds, &mut warnings);
     field(&mut fields, "always_on_top", &mut config.always_on_top, &mut warnings);
+    field(&mut fields, "hotkeys", &mut config.hotkeys, &mut warnings);
     field(&mut fields, "text_outline", &mut config.text_outline, &mut warnings);
     field(&mut fields, "clock_format", &mut config.clock_format, &mut warnings);
     field(&mut fields, "show_date", &mut config.show_date, &mut warnings);
@@ -1057,6 +1061,17 @@ mod tests {
         assert_eq!((loaded.config.alarm_at, loaded.config.alarm_due), (TimeOfDay::new(7, 0).unwrap(), None));
         assert_eq!(loaded.config.timer_minutes, 5, "the rest survives");
         assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn hotkeys_default_on_and_round_trip() {
+        let dir = Dir::new("hotkeys");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        assert!(load(&path).config.hotkeys, "a file from before the field gets them");
+        let config = Config { hotkeys: false, ..Config::returning() };
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).config, config);
     }
 
     #[test]

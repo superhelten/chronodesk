@@ -8,6 +8,7 @@ mod chime;
 mod clock;
 mod config;
 mod digital;
+mod hotkeys;
 mod icon;
 mod install;
 mod instance;

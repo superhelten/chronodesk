@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Local};
@@ -15,6 +15,7 @@ use crate::chime;
 use crate::clock::ClockFormat;
 use crate::config::{self, Config};
 use crate::digital;
+use crate::hotkeys::Hotkeys;
 use crate::install;
 use crate::instrument::{self, Cause, Instrument, Milestone};
 use crate::layout::{DerivedLayout, Font, LayoutKey};
@@ -118,6 +119,16 @@ pub struct ChronoApp {
     update_step: UpdateStep,
     /// A download under way: the verified setup, or why there is none.
     update_download: Option<Receiver<Result<PathBuf, update::Refused>>>,
+    /// The global hotkeys while they are registered, and whether they are
+    /// meant to be: they can be wanted and still missing, when Windows
+    /// refused them.
+    hotkeys: Option<Hotkeys>,
+    hotkeys_wanted: bool,
+    /// Only the real overlay takes keys from the whole desktop: a script's
+    /// would take them from whoever is at the keyboard.
+    hotkeys_allowed: bool,
+    hotkey_tx: Sender<Command>,
+    hotkey_rx: Receiver<Command>,
     /// This exe is the installed copy, which an update may replace.
     installed: bool,
     /// The welcome card is up instead of the readout.
@@ -179,6 +190,7 @@ impl ChronoApp {
         let installed = std::env::current_exe().is_ok_and(|exe| install::is_installed(&exe));
         let mut app = Self::assemble(&cc.egui_ctx, settings, writable_path, signals, tray, instrument, exe);
         app.updates_allowed = updates_allowed;
+        app.hotkeys_allowed = !app.instrument.active();
         app.installed = installed;
         app.dirty_since = repaired.then(Instant::now);
         Ok(app)
@@ -208,6 +220,7 @@ impl ChronoApp {
             .countdown
             .map_or_else(|| Countdown::new(duration), |saved| Countdown::restore(duration, saved, now, wall));
 
+        let (hotkey_tx, hotkey_rx) = mpsc::channel();
         let autostart = Autostart::system();
         let autostart_on = (exe.as_deref().is_some_and(|exe| autostart.enabled(exe)), Instant::now());
         if !settings.always_on_top && !instrument.active() {
@@ -233,6 +246,11 @@ impl ChronoApp {
             update_step: UpdateStep::Offered,
             update_download: None,
             installed: false,
+            hotkeys: None,
+            hotkeys_wanted: false,
+            hotkeys_allowed: false,
+            hotkey_tx,
+            hotkey_rx,
             dirty_since: None,
             locked: false,
             stopwatch,
@@ -346,7 +364,11 @@ impl eframe::App for ChronoApp {
             strip_window_chrome(frame);
         }
 
+        self.sync_hotkeys(&ctx);
         let mut commands: Vec<Command> = self.tray.commands().collect();
+        // Like the tray's, and unlike the overlay's own keys, these work
+        // while it is locked: that is what they are for.
+        commands.extend(self.hotkey_rx.try_iter());
         commands.extend(self.instrument.commands());
         if !self.locked {
             commands.extend(self.keyboard_commands(&ctx));
@@ -641,7 +663,7 @@ impl eframe::App for ChronoApp {
                 },
             );
             format!(
-                "mode={} welcome={} attention={} alarm_due={} ringing={} pomodoro={} phase={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
+                "mode={} welcome={} attention={} alarm_due={} ringing={} pomodoro={} phase={} hotkeys={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
                 self.settings.mode.id(),
                 u8::from(self.welcome),
                 u8::from(self.attention.is_some()),
@@ -649,6 +671,7 @@ impl eframe::App for ChronoApp {
                 u8::from(ringing.is_some()),
                 u8::from(self.settings.pomodoro),
                 self.settings.pomodoro_phase,
+                self.hotkeys.as_ref().map_or(0, Hotkeys::registered),
                 rect.width(),
                 rect.height(),
                 u8::from(self.stopwatch.is_running()),

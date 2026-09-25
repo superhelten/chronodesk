@@ -142,6 +142,21 @@ and an event stays set until it is waited on, so a signal sent in that gap is
 delivered once the listener starts. On *show* the listener also restores a
 minimised window, since whoever asked is looking for it.
 
+## Hotkeys
+
+The overlay's own keys only work while it has the focus, which it never takes
+by itself and cannot have while it is locked. The same keys are also
+registered with Windows under Ctrl+Alt+Shift, plus `L` for the lock. Three
+modifiers because a registered hotkey is taken from every other program:
+Ctrl+Alt alone is AltGr on many keyboards, and games bind most things with
+fewer. A chord that another program already holds is skipped, not fought
+over.
+
+`RegisterHotKey` without a window posts to the thread that registered it, so
+the hotkeys have a thread of their own with a message loop, and send what
+they hear through the same kind of channel the tray uses. Scripted and test
+instances never register any.
+
 ## Start with Windows
 
 The setting is stored in exactly one place: the per-user `Run` key in the

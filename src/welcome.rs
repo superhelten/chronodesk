@@ -14,12 +14,13 @@ pub const TITLE: &str = "WELCOME TO CHRONODESK";
 pub const DISMISS: &str = "CLICK TO BEGIN";
 
 /// A key or a place, and what it does.
-pub const ROWS: [(&str, &str); 8] = [
+pub const ROWS: [(&str, &str); 9] = [
     ("Right-click", "the overlay or its tray icon for the menu"),
     ("1  2  3  4", "Clock · Stopwatch · Timer · Markets"),
     ("Space  R", "start / pause and reset, or hover for the buttons"),
     ("Scroll", "over an idle timer sets its minutes"),
     ("Drag", "moves it; left-click the tray icon locks it click-through"),
+    ("Anywhere", "Ctrl+Alt+Shift + Space R L 1-4, even when locked"),
     ("Face", "Appearance > Face: Typeface, Seven-segment, Dot matrix"),
     ("Colours", "Appearance > Colours: Default to Green matrix, Red seven-segment"),
     ("Studio look", "Studio (green / red) + Seconds ring + Dot matrix"),
@@ -56,6 +57,12 @@ mod tests {
         let (_, modes) = ROWS.iter().find(|(key, _)| key.starts_with('1')).expect("the number keys");
         let positions: Vec<usize> = Mode::ALL.iter().map(|mode| modes.find(mode.label()).expect("named")).collect();
         assert!(positions.is_sorted(), "1-4 must read in `Mode::ALL` order: {modes}");
+    }
+
+    #[test]
+    fn the_hotkeys_are_named_as_they_are_registered() {
+        let (_, keys) = ROWS.iter().find(|(key, _)| *key == "Anywhere").expect("the hotkey row");
+        assert!(keys.contains(crate::hotkeys::MODIFIERS) && keys.contains(crate::hotkeys::KEYS), "{keys}");
     }
 
     #[test]

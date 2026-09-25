@@ -88,6 +88,10 @@ try {
   Connect $port
   $results += Check "channel: app publishes a port and answers" ((Send "stats") -match 'frames=') "port $port"
   Send "passthrough on" | Out-Null
+  # The global hotkeys belong to the user's own overlay; a script's must not
+  # take them from whoever is at the keyboard.
+  $state = WaitState 'hotkeys='
+  $results += Check "hotkeys: a scripted instance registers none" ($state -match 'hotkeys=0 ') $state
 
   # --- A: clock mode, nothing hovered: one frame per second -----------------
   Assert-Drawing 'A: clock idle'

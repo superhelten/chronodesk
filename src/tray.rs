@@ -13,6 +13,7 @@ use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, 
 use crate::app::{Mode, Size};
 use crate::board::Layout;
 use crate::clock::ClockFormat;
+use crate::hotkeys;
 use crate::icon;
 use crate::layout::Font;
 use crate::market::{Labels, Market};
@@ -62,6 +63,8 @@ pub enum Command {
     /// minute separately).
     SetAlarm(TimeOfDay),
     ToggleOnTop,
+    /// Registers the global hotkeys, or gives them back.
+    ToggleHotkeys,
     /// Registers this exe to start at login, or removes the entry.
     ToggleAutostart,
     /// Shows the welcome card again.
@@ -93,6 +96,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "horizontal" => Command::ToggleBoardLayout,
         "codes" => Command::ToggleBoardLabels,
         "ontop" => Command::ToggleOnTop,
+        "hotkeys" => Command::ToggleHotkeys,
         "autostart" => Command::ToggleAutostart,
         "welcome" => Command::ShowWelcome,
         "update" => Command::Update,
@@ -149,6 +153,7 @@ pub struct MenuState {
     pub alarm_on: bool,
     pub alarm_label: String,
     pub always_on_top: bool,
+    pub hotkeys: bool,
     pub autostart: bool,
     pub autostart_available: bool,
     pub check_updates: bool,
@@ -187,6 +192,7 @@ pub struct Tray {
     /// "None" first, then every city.
     zones: Vec<(Option<City>, CheckMenuItem)>,
     on_top: CheckMenuItem,
+    hotkeys: CheckMenuItem,
     autostart: CheckMenuItem,
     check_updates: CheckMenuItem,
     /// Only in the menu while there is an update to offer.
@@ -278,6 +284,7 @@ impl Tray {
             .chain(City::ALL.into_iter().map(|c| (Some(c), check(&format!("zone:{}", c.id()), c.label()))))
             .collect();
         let on_top = check("ontop", "Always on top");
+        let hotkeys = check("hotkeys", &format!("Global hotkeys ({})", hotkeys::MODIFIERS));
         let autostart = check("autostart", "Start with Windows");
         let check_updates = check("checkupdates", "Check for updates");
         let update = (MenuItem::with_id("update", "Update available", true, None), PredefinedMenuItem::separator());
@@ -347,6 +354,7 @@ impl Tray {
             &s3,
             &appearance_menu,
             &on_top,
+            &hotkeys,
             &autostart,
             &check_updates,
             &s4,
@@ -398,6 +406,7 @@ impl Tray {
             date,
             zones,
             on_top,
+            hotkeys,
             autostart,
             check_updates,
             update,
@@ -483,6 +492,7 @@ impl Tray {
         self.chroma.set_checked(state.chroma);
         self.seconds.set_checked(state.show_seconds);
         self.on_top.set_checked(state.always_on_top);
+        self.hotkeys.set_checked(state.hotkeys);
         self.autostart.set_checked(state.autostart);
         self.autostart.set_enabled(state.autostart_available);
         self.check_updates.set_checked(state.check_updates);
@@ -573,6 +583,7 @@ mod tests {
         assert_eq!(parse_command("lock"), Some(Command::ToggleLock));
         assert_eq!(parse_command("quit"), Some(Command::Quit));
         assert_eq!(parse_command("autostart"), Some(Command::ToggleAutostart));
+        assert_eq!(parse_command("hotkeys"), Some(Command::ToggleHotkeys));
         assert_eq!(parse_command("welcome"), Some(Command::ShowWelcome));
         assert_eq!(parse_command("timer:25"), Some(Command::SetTimerMinutes(25)));
         for mode in Mode::ALL {

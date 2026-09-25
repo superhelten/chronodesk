@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use eframe::egui::{self, ViewportCommand, WindowLevel};
 
 use crate::alarm;
+use crate::hotkeys;
 use crate::market::Market;
 use crate::night::TimeOfDay;
 use crate::pomodoro;
@@ -116,6 +117,7 @@ impl ChronoApp {
                 }
             }
             Command::ToggleAutostart => self.toggle_autostart(now),
+            Command::ToggleHotkeys => s.hotkeys = !s.hotkeys,
             Command::ShowWelcome => self.welcome = true,
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
             Command::Update => {}
@@ -233,6 +235,7 @@ impl ChronoApp {
             alarm_on: s.alarm_due.is_some(),
             alarm_label: alarm::label(s.alarm_at, s.alarm_due, &self.wall_clock()),
             always_on_top: s.always_on_top,
+            hotkeys: s.hotkeys,
             autostart: self.autostart_on.0,
             autostart_available: self.exe.is_some(),
             check_updates: s.check_updates,
@@ -251,6 +254,22 @@ impl ChronoApp {
             eprintln!("ChronoDesk: could not update the startup entry: {err}");
         }
         self.autostart_on = (self.autostart.enabled(exe), now);
+    }
+
+    /// Registers the hotkeys when they are wanted and gives them back when
+    /// not, once per change of mind: a chord another program holds is not
+    /// asked for again every frame.
+    pub(super) fn sync_hotkeys(&mut self, ctx: &egui::Context) {
+        let wanted = self.hotkeys_allowed && self.settings.hotkeys;
+        if wanted == self.hotkeys_wanted {
+            return;
+        }
+        self.hotkeys_wanted = wanted;
+        self.hotkeys = None;
+        if wanted {
+            let ctx = ctx.clone();
+            self.hotkeys = hotkeys::start(self.hotkey_tx.clone(), move || ctx.request_repaint());
+        }
     }
 
     pub(super) fn recheck_autostart(&mut self, now: Instant) {
@@ -429,6 +448,19 @@ mod tests {
         let done = t0 + minutes(52);
         app.apply(Command::StartPause, &ctx, t0 + minutes(26));
         assert_eq!(app.menu_state(done).start_label, "Restart");
+    }
+
+    /// A test's overlay, like a script's, leaves the keyboard alone, whatever
+    /// its settings say.
+    #[test]
+    fn an_overlay_in_a_test_registers_no_hotkeys() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::returning(), Local::now());
+        assert!(app.settings.hotkeys);
+        app.sync_hotkeys(&ctx);
+        assert!(app.hotkeys.is_none());
+        app.apply(Command::ToggleHotkeys, &ctx, Instant::now());
+        assert!(!app.settings.hotkeys && !app.menu_state(Instant::now()).hotkeys);
     }
 
     #[test]

@@ -24,7 +24,7 @@ stock exchanges are open right now.
   on the timer.
 - **Hardware looks:** dot-matrix or seven-segment LED faces with ghosted unlit segments, a studio
   seconds ring with sixty LEDs, and industrial colour presets (green, red, yellow, studio green/red).
-- **Stays out of the way:** click-through lock, night dimming, chroma-key background for streaming,
+- **Stays out of the way:** click-through lock with hotkeys that still reach it, night dimming, chroma-key background for streaming,
   a stopwatch or timer that survives a reboot, and a chime when the timer runs out.
 - **Light:** one ~5.8 MB exe with no assets, ~50 MB RAM, one frame per second when idle. No admin
   rights, no telemetry. The only network use is one request a day to see if there is a new release,
@@ -75,6 +75,7 @@ Right-click the overlay or the tray icon to open the menu. Everything can be set
 | Lock (click-through) | Left-click the tray icon. The icon turns amber while locked, and a second click unlocks |
 | Switch mode | Menu, or `1` Clock, `2` Stopwatch, `3` Timer, `4` Markets |
 | Start/pause, reset | Hover the stopwatch or timer, or click the overlay and press `Space` / `R` |
+| From any window | `Ctrl+Alt+Shift` with `Space`, `R`, `1`–`4`, or `L` to lock and unlock. Works while locked; switch off under *Global hotkeys* |
 | Timer duration | Menu → *Timer duration*, or scroll over a stopped timer |
 | Alarm | Menu → *Alarm*: pick the hour and minute, or switch it on and off |
 | Start with Windows | Menu → *Start with Windows* |
@@ -133,6 +134,7 @@ file. If a value is invalid, that one setting falls back to its default and the 
 | `show_seconds`, `show_date`, `seconds_ring` | `true` / `false` |
 | `second_zone` | `None`, or `Some("tokyo")` with one of `"utc"`, `"los-angeles"`, `"chicago"`, `"new-york"`, `"sao-paulo"`, `"london"`, `"paris"`, `"oslo"`, `"dubai"`, `"mumbai"`, `"singapore"`, `"hong-kong"`, `"tokyo"`, `"sydney"` |
 | `backdrop`, `chroma`, `text_outline`, `always_on_top` | `true` / `false` |
+| `hotkeys` | `true` / `false`: the Ctrl+Alt+Shift hotkeys |
 | `timer_minutes` | 1 to 1440 |
 | `timer_sound` | `true` / `false` |
 | `pomodoro` | `true` / `false`: run the timer as a Pomodoro cycle |
