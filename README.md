@@ -24,7 +24,7 @@ stock exchanges are open right now.
   seconds ring with sixty LEDs, and industrial colour presets (green, red, yellow, studio green/red).
 - **Stays out of the way:** click-through lock, night dimming, chroma-key background for streaming,
   a stopwatch or timer that survives a reboot, and a chime when the timer runs out.
-- **Light:** one ~5.5 MB exe with no assets, ~40 MB RAM, one frame per second when idle. No admin
+- **Light:** one ~5.8 MB exe with no assets, ~50 MB RAM, one frame per second when idle. No admin
   rights, no telemetry. The only network use is one request a day to see if there is a new release,
   which can be switched off.
 
