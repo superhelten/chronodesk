@@ -6,8 +6,8 @@
 #  - running the setup again with the same version copies nothing, leaves the
 #    running overlay running and asks it to show itself (quietly: does nothing);
 #  - so does simply starting the installed exe a second time, and that brings
-#    the overlay back even from minimised, where it draws nothing and has no
-#    taskbar button to be restored from;
+#    the overlay back even from minimised, where it is out of sight and has
+#    no taskbar button to be restored from;
 #  - a "Start with Windows" entry that exists is repointed at the fixed path,
 #    and one that does not exist is not invented;
 #  - a setup with another version makes the running overlay quit, replaces the
@@ -149,8 +149,8 @@ try {
   $results += Check "second launch: steps aside, and the first one shows itself" `
     ($code -eq 0 -and $quiet -match 'attention=0' -and $state -match 'attention=1' -and (Overlays).Count -eq 1) "$quiet => $state"
 
-  # A minimised overlay draws no frames at all, so it cannot be asked anything
-  # through the app; the second launch has to bring it back regardless.
+  # A minimised overlay is out of sight with no taskbar button to restore it
+  # from; the second launch has to bring it back.
   $hwnd = Window $first[0]
   [N]::ShowWindow($hwnd, 6) | Out-Null
   Start-Sleep 1
