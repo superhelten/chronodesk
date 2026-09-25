@@ -173,6 +173,7 @@ pub(super) struct LineShape {
     pub(super) show_date: bool,
     pub(super) second_zone: Option<City>,
     pub(super) timer_minutes: u64,
+    pub(super) pomodoro: bool,
 }
 
 /// The widest a readout has been since its shape last changed. The text on

@@ -8,9 +8,10 @@ use eframe::egui::{self, ViewportCommand, WindowLevel};
 use crate::alarm;
 use crate::market::Market;
 use crate::night::TimeOfDay;
+use crate::pomodoro;
 use crate::tray::{Command, MenuState};
 
-use super::{ChronoApp, Mode, minutes};
+use super::{ChronoApp, Mode, countdown_length};
 
 /// How stale the menu's autostart check mark may get. The registry can change
 /// behind the app's back (Settings, Task Manager); it is re-read on frames that
@@ -30,7 +31,8 @@ impl ChronoApp {
         let alarm_was_on = self.settings.alarm_due.is_some();
         self.silence_alarm();
         let local = self.wall_clock();
-        let counters_touched = matches!(cmd, Command::StartPause | Command::Reset | Command::SetTimerMinutes(_));
+        let counters_touched =
+            matches!(cmd, Command::StartPause | Command::Reset | Command::SetTimerMinutes(_) | Command::TogglePomodoro);
         let s = &mut self.settings;
         match cmd {
             Command::ToggleLock => {
@@ -41,18 +43,40 @@ impl ChronoApp {
             Command::SetTimerMinutes(min) => {
                 s.timer_minutes = min.clamp(1, 24 * 60);
                 s.mode = Mode::Timer;
-                self.countdown.set_duration(minutes(s.timer_minutes));
+                // Another focus length is another cycle.
+                s.pomodoro_phase = 0;
+                self.countdown.set_duration(countdown_length(s));
             }
             Command::StartPause => match s.mode {
                 Mode::Clock | Mode::Market => {}
                 Mode::Stopwatch => self.stopwatch.toggle(now),
-                Mode::Timer => self.countdown.toggle(now),
+                Mode::Timer => {
+                    // A period that has run out is followed by the next,
+                    // which starts here rather than from the top again.
+                    if s.pomodoro && self.countdown.is_finished(now) {
+                        s.pomodoro_phase = pomodoro::next(s.pomodoro_phase);
+                        self.countdown.set_duration(countdown_length(s));
+                    }
+                    self.countdown.toggle(now);
+                }
             },
             Command::Reset => match s.mode {
                 Mode::Clock | Mode::Market => {}
                 Mode::Stopwatch => self.stopwatch.reset(),
+                // Once to start the period over, and again, on a period that
+                // has not started, to start the cycle over.
+                Mode::Timer if s.pomodoro && self.countdown.is_idle() => {
+                    s.pomodoro_phase = 0;
+                    self.countdown.set_duration(countdown_length(s));
+                }
                 Mode::Timer => self.countdown.reset(),
             },
+            Command::TogglePomodoro => {
+                s.pomodoro = !s.pomodoro;
+                s.pomodoro_phase = 0;
+                s.mode = Mode::Timer;
+                self.countdown.set_duration(countdown_length(s));
+            }
             Command::ToggleMarket(market) => toggle_market(&mut s.markets, market),
             Command::ToggleBoardLayout => s.board_layout = s.board_layout.toggled(),
             Command::ToggleBoardLabels => s.board_labels = s.board_labels.toggled(),
@@ -177,6 +201,7 @@ impl ChronoApp {
         let start_label = match s.mode {
             Mode::Clock => "Start",
             Mode::Stopwatch if self.stopwatch.is_running() => "Pause",
+            Mode::Timer if self.countdown.is_finished(now) && s.pomodoro => pomodoro::phase(s.pomodoro_phase).start_next(),
             Mode::Timer if self.countdown.is_finished(now) => "Restart",
             Mode::Timer if self.countdown.is_running(now) => "Pause",
             _ => "Start",
@@ -203,6 +228,7 @@ impl ChronoApp {
             board_labels: s.board_labels,
             seconds_ring: s.seconds_ring,
             timer_sound: s.timer_sound,
+            pomodoro: s.pomodoro,
             alarm_at: s.alarm_at,
             alarm_on: s.alarm_due.is_some(),
             alarm_label: alarm::label(s.alarm_at, s.alarm_due, &self.wall_clock()),
@@ -319,6 +345,90 @@ mod tests {
         let raw = egui::RawInput { events: vec![space(true)], ..Default::default() };
         ctx.run_ui(raw, |ui| commands = app.keyboard_commands(ui.ctx())).textures_delta.clear();
         assert_eq!(commands, vec![], "still held");
+    }
+
+    fn minutes(m: u64) -> Duration {
+        Duration::from_secs(m * 60)
+    }
+
+    fn pomodoro(ctx: &egui::Context) -> ChronoApp {
+        let mut app = ChronoApp::pinned(ctx, Config::default(), Local::now());
+        app.apply(Command::TogglePomodoro, ctx, Instant::now());
+        app
+    }
+
+    /// A finished period waits; Start begins the next one, at its own length.
+    #[test]
+    fn start_on_a_finished_pomodoro_period_begins_the_next() {
+        let ctx = egui::Context::default();
+        let mut app = pomodoro(&ctx);
+        assert!(app.settings.pomodoro && app.settings.mode == Mode::Timer);
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (0, minutes(25)));
+
+        let t0 = Instant::now();
+        app.apply(Command::StartPause, &ctx, t0);
+        let done = t0 + minutes(25) + Duration::from_secs(1);
+        assert!(app.countdown.is_finished(done), "nothing moves on by itself");
+        assert_eq!(app.menu_state(done).start_label, "Start break");
+
+        app.apply(Command::StartPause, &ctx, done);
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (1, minutes(5)));
+        assert!(app.countdown.is_running(done));
+        assert_eq!(app.menu_state(done).start_label, "Pause");
+
+        let over = done + minutes(5) + Duration::from_secs(1);
+        assert_eq!(app.menu_state(over).start_label, "Start focus");
+        app.apply(Command::StartPause, &ctx, over);
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (2, minutes(25)));
+    }
+
+    /// Reset starts the period over; pressed again on a period that has not
+    /// started, it starts the whole cycle over.
+    #[test]
+    fn reset_restarts_the_period_and_again_the_cycle() {
+        let ctx = egui::Context::default();
+        let mut app = pomodoro(&ctx);
+        let t0 = Instant::now();
+        app.apply(Command::StartPause, &ctx, t0);
+        let done = t0 + minutes(26);
+        app.apply(Command::StartPause, &ctx, done);
+        assert_eq!(app.settings.pomodoro_phase, 1);
+
+        app.apply(Command::Reset, &ctx, done);
+        assert!(app.countdown.is_idle());
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (1, minutes(5)), "still the break");
+        app.apply(Command::Reset, &ctx, done);
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (0, minutes(25)), "the cycle from the top");
+    }
+
+    /// Another duration is another focus period, so the cycle starts over.
+    #[test]
+    fn a_new_duration_starts_the_cycle_over_with_breaks_to_match() {
+        let ctx = egui::Context::default();
+        let mut app = pomodoro(&ctx);
+        let t0 = Instant::now();
+        app.apply(Command::StartPause, &ctx, t0);
+        app.apply(Command::StartPause, &ctx, t0 + minutes(26));
+        app.apply(Command::SetTimerMinutes(50), &ctx, t0 + minutes(26));
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (0, minutes(50)));
+        assert!(app.countdown.is_idle());
+    }
+
+    #[test]
+    fn switching_the_cycle_off_leaves_a_plain_timer() {
+        let ctx = egui::Context::default();
+        let mut app = pomodoro(&ctx);
+        let t0 = Instant::now();
+        app.apply(Command::StartPause, &ctx, t0);
+        app.apply(Command::StartPause, &ctx, t0 + minutes(26));
+        app.apply(Command::TogglePomodoro, &ctx, t0 + minutes(26));
+        assert!(!app.settings.pomodoro);
+        assert_eq!((app.settings.pomodoro_phase, app.countdown.duration()), (0, minutes(25)));
+        assert!(app.countdown.is_idle(), "the break that was running is not carried over");
+
+        let done = t0 + minutes(52);
+        app.apply(Command::StartPause, &ctx, t0 + minutes(26));
+        assert_eq!(app.menu_state(done).start_label, "Restart");
     }
 
     #[test]

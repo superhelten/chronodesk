@@ -8,6 +8,7 @@ use eframe::egui::Color32;
 use crate::clock::{ClockStyle, clock_readout};
 use crate::market::{self, BoardStyle};
 use crate::night::{self, Schedule};
+use crate::pomodoro;
 use crate::ring;
 use crate::theme::{self, Theme};
 use crate::timer;
@@ -90,6 +91,7 @@ impl ChronoApp {
             Mode::Timer => {
                 let cd = &self.countdown;
                 let remaining = cd.remaining(now);
+                let period = s.pomodoro.then(|| pomodoro::phase(s.pomodoro_phase));
                 if let Some(over) = cd.overtime(now) {
                     let blinking = over < BLINK_FOR;
                     let lit = !blinking || over.as_millis() % 1000 < 600;
@@ -97,19 +99,20 @@ impl ChronoApp {
                     let next = if into < 600 { 600 - into } else { 1000 - into };
                     line(
                         timer::format_countdown(remaining),
-                        "TIME'S UP".into(),
+                        period.map_or("TIME'S UP", |p| p.over()).into(),
                         if lit { c.alert } else { theme::fade(c.alert, 0.25, s.chroma) },
                         blinking.then(|| Duration::from_millis(next)),
                         0,
                     )
                 } else {
                     let running = cd.is_running(now);
-                    let caption = if running {
-                        "TIMER".to_owned()
-                    } else if cd.is_idle() {
-                        format!("TIMER · {} MIN", cd.duration().as_secs() / 60)
-                    } else {
-                        "PAUSED".to_owned()
+                    let caption = match (period, running, cd.is_idle()) {
+                        (None, true, _) => "TIMER".to_owned(),
+                        (None, false, true) => format!("TIMER · {} MIN", cd.duration().as_secs() / 60),
+                        (None, false, false) => "PAUSED".to_owned(),
+                        (Some(p), true, _) => p.name(),
+                        (Some(p), false, true) => format!("{} · {} MIN", p.name(), cd.duration().as_secs() / 60),
+                        (Some(p), false, false) => format!("{} · PAUSED", p.name()),
                     };
                     // The ring drains with the digits: the seconds left in
                     // the current minute, rounded up like the readout.
@@ -143,5 +146,46 @@ pub(super) struct Readout {
     pub(super) next_change: Option<Duration>,
     /// How many LEDs of the studio ring are lit, when it is on.
     pub(super) ring: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::tray::Command;
+
+    fn caption(app: &ChronoApp, now: Instant) -> String {
+        app.readout(now, Local::now()).caption
+    }
+
+    #[test]
+    fn a_pomodoro_timer_names_its_period_in_the_caption() {
+        let ctx = eframe::egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        let t0 = Instant::now();
+        app.apply(Command::TogglePomodoro, &ctx, t0);
+        assert_eq!(caption(&app, t0), "FOCUS 1/4 · 25 MIN");
+        app.apply(Command::StartPause, &ctx, t0);
+        assert_eq!(caption(&app, t0), "FOCUS 1/4");
+        let paused = t0 + Duration::from_secs(60);
+        app.apply(Command::StartPause, &ctx, paused);
+        assert_eq!(caption(&app, paused), "FOCUS 1/4 · PAUSED");
+        app.apply(Command::StartPause, &ctx, paused);
+        let done = paused + Duration::from_secs(25 * 60);
+        assert_eq!(caption(&app, done), "TIME FOR A BREAK");
+        app.apply(Command::StartPause, &ctx, done);
+        assert_eq!(caption(&app, done), "BREAK");
+    }
+
+    #[test]
+    fn a_plain_timer_keeps_its_captions() {
+        let ctx = eframe::egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config { mode: Mode::Timer, ..Config::returning() }, Local::now());
+        let t0 = Instant::now();
+        assert_eq!(caption(&app, t0), "TIMER · 25 MIN");
+        app.apply(Command::StartPause, &ctx, t0);
+        assert_eq!(caption(&app, t0), "TIMER");
+        assert_eq!(caption(&app, t0 + Duration::from_secs(25 * 60)), "TIME'S UP");
+    }
 }
 

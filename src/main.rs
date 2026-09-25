@@ -17,6 +17,7 @@ mod market;
 mod matrix;
 mod night;
 mod placement;
+mod pomodoro;
 mod registry;
 mod ring;
 mod signal;

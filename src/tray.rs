@@ -51,6 +51,8 @@ pub enum Command {
     ToggleBoardLabels,
     ToggleRing,
     ToggleTimerSound,
+    /// Runs the timer as a Pomodoro cycle, or as a plain timer again.
+    TogglePomodoro,
     /// Arms the alarm at the time last picked, or disarms it.
     ToggleAlarm,
     /// Picks the alarm's hour or minute, keeping the other, and arms it.
@@ -86,6 +88,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "digital" => Command::ToggleFont,
         "ring" => Command::ToggleRing,
         "timersound" => Command::ToggleTimerSound,
+        "pomodoro" => Command::TogglePomodoro,
         "alarm" => Command::ToggleAlarm,
         "horizontal" => Command::ToggleBoardLayout,
         "codes" => Command::ToggleBoardLabels,
@@ -140,6 +143,7 @@ pub struct MenuState {
     pub board_labels: Labels,
     pub seconds_ring: bool,
     pub timer_sound: bool,
+    pub pomodoro: bool,
     /// The alarm's time, whether it is armed, and the switch's label.
     pub alarm_at: TimeOfDay,
     pub alarm_on: bool,
@@ -164,6 +168,7 @@ pub struct Tray {
     codes: CheckMenuItem,
     ring: CheckMenuItem,
     timer_sound: CheckMenuItem,
+    pomodoro: CheckMenuItem,
     alarm: CheckMenuItem,
     alarm_hours: Vec<(u32, CheckMenuItem)>,
     alarm_minutes: Vec<(u32, CheckMenuItem)>,
@@ -254,6 +259,7 @@ impl Tray {
             Font::ALL.into_iter().map(|f| (f, check(&format!("font:{}", f.id()), f.label()))).collect();
         let ring = check("ring", "Seconds ring");
         let timer_sound = check("timersound", "Sound when finished");
+        let pomodoro = check("pomodoro", "Pomodoro cycle");
         let alarm = check("alarm", "Alarm at 07:00");
         let alarm_hours: Vec<_> = (0..24).map(|h| (h, check(&format!("alarmhour:{h}"), &format!("{h:02}")))).collect();
         let alarm_minutes: Vec<_> = (0..60)
@@ -280,7 +286,7 @@ impl Tray {
 
         let mut preset_refs: Vec<&dyn IsMenuItem> = presets.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
         let (m1, t1) = (PredefinedMenuItem::separator(), PredefinedMenuItem::separator());
-        preset_refs.extend([&t1 as &dyn IsMenuItem, &timer_sound]);
+        preset_refs.extend([&t1 as &dyn IsMenuItem, &pomodoro, &timer_sound]);
         let mut market_refs: Vec<&dyn IsMenuItem> = vec![&horizontal, &codes, &m1];
         market_refs.extend(markets.iter().map(|(_, i)| i as &dyn IsMenuItem));
         let size_refs: Vec<&dyn IsMenuItem> = sizes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
@@ -374,6 +380,7 @@ impl Tray {
             codes,
             ring,
             timer_sound,
+            pomodoro,
             alarm,
             alarm_hours,
             alarm_minutes,
@@ -434,6 +441,7 @@ impl Tray {
         self.codes.set_checked(state.board_labels == Labels::Code);
         self.ring.set_checked(state.seconds_ring);
         self.timer_sound.set_checked(state.timer_sound);
+        self.pomodoro.set_checked(state.pomodoro);
         self.alarm.set_checked(state.alarm_on);
         self.alarm.set_text(&state.alarm_label);
         for (hour, item) in &self.alarm_hours {
@@ -610,6 +618,7 @@ mod tests {
         assert_eq!(parse_command("codes"), Some(Command::ToggleBoardLabels));
         assert_eq!(parse_command("ring"), Some(Command::ToggleRing));
         assert_eq!(parse_command("timersound"), Some(Command::ToggleTimerSound));
+        assert_eq!(parse_command("pomodoro"), Some(Command::TogglePomodoro));
     }
 
     #[test]

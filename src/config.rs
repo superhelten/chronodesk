@@ -86,6 +86,11 @@ pub struct Config {
     pub seconds_ring: bool,
     /// Chime when the countdown reaches zero (the system's notification sound).
     pub timer_sound: bool,
+    /// The timer runs a Pomodoro cycle: focus periods of `timer_minutes`
+    /// with breaks between them (see `pomodoro.rs`).
+    pub pomodoro: bool,
+    /// Where in that cycle it is, `0..8`; written by the app.
+    pub pomodoro_phase: u8,
     /// The time last picked for the alarm, kept while it is off so the menu
     /// can switch it back on at the same time.
     pub alarm_at: TimeOfDay,
@@ -144,6 +149,8 @@ impl Default for Config {
             board_labels: Labels::City,
             seconds_ring: false,
             timer_sound: true,
+            pomodoro: false,
+            pomodoro_phase: 0,
             alarm_at: TimeOfDay::new(7, 0).expect("valid"),
             alarm_due: None,
             stopwatch: None,
@@ -338,6 +345,8 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "board_labels", &mut config.board_labels, &mut warnings);
     field(&mut fields, "seconds_ring", &mut config.seconds_ring, &mut warnings);
     field(&mut fields, "timer_sound", &mut config.timer_sound, &mut warnings);
+    field(&mut fields, "pomodoro", &mut config.pomodoro, &mut warnings);
+    field(&mut fields, "pomodoro_phase", &mut config.pomodoro_phase, &mut warnings);
     field(&mut fields, "alarm_at", &mut config.alarm_at, &mut warnings);
     field(&mut fields, "alarm_due", &mut config.alarm_due, &mut warnings);
     field(&mut fields, "stopwatch", &mut config.stopwatch, &mut warnings);
@@ -1048,6 +1057,24 @@ mod tests {
         assert_eq!((loaded.config.alarm_at, loaded.config.alarm_due), (TimeOfDay::new(7, 0).unwrap(), None));
         assert_eq!(loaded.config.timer_minutes, 5, "the rest survives");
         assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
+    }
+
+    #[test]
+    fn the_pomodoro_cycle_is_off_and_keeps_its_place() {
+        let dir = Dir::new("pomodoro");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        let loaded = load(&path);
+        assert_eq!((loaded.config.pomodoro, loaded.config.pomodoro_phase), (false, 0));
+
+        let config = Config { pomodoro: true, pomodoro_phase: 5, ..Config::returning() };
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).config, config);
+
+        write(&path, "(schema_version:1,pomodoro:true,pomodoro_phase:-1,timer_minutes:5)");
+        let loaded = load(&path);
+        assert_eq!((loaded.config.pomodoro, loaded.config.pomodoro_phase), (true, 0));
+        assert_eq!(loaded.warnings.len(), 1, "{:?}", loaded.warnings);
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::install;
 use crate::instrument::{self, Cause, Instrument, Milestone};
 use crate::layout::{DerivedLayout, Font, LayoutKey};
 use crate::matrix;
+use crate::pomodoro;
 use crate::signal::{self, Signal};
 use crate::text::{display_family, install_display_font, label_family, measure_glyphs, paint_galley, paint_readout, spaced};
 use crate::theme::Theme;
@@ -201,7 +202,7 @@ impl ChronoApp {
             settings.update_available.take().filter(|v| Version::parse(v).is_some_and(|v| v > Version::current()));
         // A counter that was under way picks up where the wall clock says it is.
         let (now, wall) = (Instant::now(), SystemTime::now());
-        let duration = minutes(settings.timer_minutes);
+        let duration = countdown_length(&settings);
         let stopwatch = settings.stopwatch.map_or_else(Stopwatch::default, |saved| Stopwatch::restore(saved, now, wall));
         let countdown = settings
             .countdown
@@ -460,6 +461,7 @@ impl eframe::App for ChronoApp {
                 show_date: s.show_date,
                 second_zone: s.second_zone,
                 timer_minutes: s.timer_minutes,
+                pomodoro: s.pomodoro,
             };
             content_width = self.line_width.hold(shape, content_width);
         }
@@ -639,12 +641,14 @@ impl eframe::App for ChronoApp {
                 },
             );
             format!(
-                "mode={} welcome={} attention={} alarm_due={} ringing={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
+                "mode={} welcome={} attention={} alarm_due={} ringing={} pomodoro={} phase={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
                 self.settings.mode.id(),
                 u8::from(self.welcome),
                 u8::from(self.attention.is_some()),
                 self.settings.alarm_due.unwrap_or(0),
                 u8::from(ringing.is_some()),
+                u8::from(self.settings.pomodoro),
+                self.settings.pomodoro_phase,
                 rect.width(),
                 rect.height(),
                 u8::from(self.stopwatch.is_running()),
@@ -682,8 +686,14 @@ impl eframe::App for ChronoApp {
     }
 }
 
-fn minutes(min: u64) -> Duration {
-    Duration::from_secs(min * 60)
+/// What the countdown runs for: the timer's duration, or the length of the
+/// Pomodoro period it has got to.
+fn countdown_length(settings: &Config) -> Duration {
+    if settings.pomodoro {
+        pomodoro::duration(settings.pomodoro_phase, settings.timer_minutes)
+    } else {
+        Duration::from_secs(settings.timer_minutes * 60)
+    }
 }
 
 #[cfg(test)]

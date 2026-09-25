@@ -20,6 +20,8 @@ stock exchanges are open right now.
 - **Market board:** local time and trading status for nine exchanges from New York to Sydney,
   with a countdown to the next open or close. Computed locally, with no network access and no
   account.
+- **Clock and timers:** a second time zone after the date, a one-shot alarm, and a Pomodoro cycle
+  on the timer.
 - **Hardware looks:** dot-matrix or seven-segment LED faces with ghosted unlit segments, a studio
   seconds ring with sixty LEDs, and industrial colour presets (green, red, yellow, studio green/red).
 - **Stays out of the way:** click-through lock, night dimming, chroma-key background for streaming,
@@ -80,6 +82,13 @@ Right-click the overlay or the tray icon to open the menu. Everything can be set
 When a countdown finishes, the digits blink for half a minute and the Windows notification sound
 plays three times; *Restart* runs it again from the top. A running stopwatch or timer carries on after a restart or a reboot.
 
+*Timer duration → Pomodoro cycle* turns the timer into a Pomodoro timer: four focus periods of the
+chosen duration, a short break after each of the first three and a long one after the fourth. At
+25 minutes the breaks are 5 and 15 minutes, and they scale with other durations. The caption says
+where you are ("FOCUS 2/4", "BREAK"). A period that runs out chimes like any timer and waits;
+*Start break* or *Start focus* begins the next one. *Reset* starts the period over, and pressed
+again, the whole cycle.
+
 The alarm rings once, at the next time the clock shows the hour and minute you picked: the sound
 plays three times, ten seconds apart, and the overlay's frame blinks, in whichever mode is showing.
 A click on the overlay, a key or any menu choice silences it. It rings even with *Sound when
@@ -126,6 +135,7 @@ file. If a value is invalid, that one setting falls back to its default and the 
 | `backdrop`, `chroma`, `text_outline`, `always_on_top` | `true` / `false` |
 | `timer_minutes` | 1 to 1440 |
 | `timer_sound` | `true` / `false` |
+| `pomodoro` | `true` / `false`: run the timer as a Pomodoro cycle |
 | `alarm_at` | `"HH:MM"`, the alarm's time (default 07:00) |
 | `night` | `"off"`, `"on"`, `"auto"` |
 | `night_from`, `night_to` | `"HH:MM"`, used by `"auto"` (default 22:00 to 07:00) |
@@ -163,6 +173,7 @@ and leaves an overlay you already have running alone.
 | `welcome-test.ps1` | the welcome card on first launch |
 | `resume-test.ps1` | a running stopwatch or timer survives the app being killed |
 | `chime-test.ps1` | the timer chime (counted, not played) |
+| `pomodoro-test.ps1` | the Pomodoro cycle moves on, waits, survives a kill, and resets |
 | `startup-time.ps1` | how long a launch takes to put its first frame up |
 
 Run them with PowerShell 7 (`pwsh`).
