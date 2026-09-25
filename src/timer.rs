@@ -217,9 +217,14 @@ impl Alarm {
     /// countdown may be finishing behind another mode that is fast asleep.
     pub fn next_in(&self, countdown: &Countdown, now: Instant) -> Option<Duration> {
         match countdown.overtime(now) {
-            Some(over) => (self.sounded < CHIMES).then(|| (CHIME_EVERY * self.sounded).saturating_sub(over)),
+            Some(over) => self.next_after(over),
             None => countdown.is_running(now).then(|| countdown.remaining(now)),
         }
+    }
+
+    /// How long until the next chime, `over` into whatever fell due.
+    pub fn next_after(&self, over: Duration) -> Option<Duration> {
+        (self.sounded < CHIMES).then(|| (CHIME_EVERY * self.sounded).saturating_sub(over))
     }
 }
 

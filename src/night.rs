@@ -8,7 +8,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use chrono::{DateTime, LocalResult, NaiveTime, TimeZone, Timelike as _};
+use chrono::{DateTime, LocalResult, NaiveDateTime, NaiveTime, TimeZone, Timelike as _};
 use serde::{Deserialize, Serialize};
 
 use crate::app::serde_by_id;
@@ -68,6 +68,18 @@ impl TimeOfDay {
     fn seconds(self) -> u32 {
         u32::from(self.0) * 60
     }
+
+    pub fn hour(self) -> u32 {
+        u32::from(self.0) / 60
+    }
+
+    pub fn minute(self) -> u32 {
+        u32::from(self.0) % 60
+    }
+
+    pub fn time(self) -> NaiveTime {
+        NaiveTime::from_hms_opt(self.hour(), self.minute(), 0).expect("hour and minute in range")
+    }
 }
 
 impl fmt::Display for TimeOfDay {
@@ -116,19 +128,7 @@ impl Schedule {
     pub fn until_boundary_in<Tz: TimeZone>(self, now: &DateTime<Tz>) -> Option<Duration> {
         let wall = self.until_boundary(now.time())?;
         let target = now.naive_local() + chrono::Duration::from_std(wall).ok()?;
-        let tz = now.timezone();
-        let at = match tz.from_local_datetime(&target) {
-            LocalResult::Single(at) => Some(at),
-            // An hour the clocks go back through is shown twice; the boundary
-            // is the first showing still ahead.
-            LocalResult::Ambiguous(first, second) => Some(if first > *now { first } else { second }),
-            // An hour the clocks skip is never shown: the boundary took effect
-            // as the clock jumped past it, which is the first minute that exists.
-            LocalResult::None => {
-                (1..=180).find_map(|m| tz.from_local_datetime(&(target + chrono::Duration::minutes(m))).earliest())
-            }
-        };
-        let real = at.and_then(|at| (at - now.clone()).to_std().ok()).filter(|d| !d.is_zero());
+        let real = resolve_ahead(&target, now).and_then(|at| (at - now.clone()).to_std().ok()).filter(|d| !d.is_zero());
         Some(real.unwrap_or(wall))
     }
 
@@ -156,6 +156,22 @@ impl Schedule {
     }
 }
 
+/// The real instant a wall-clock time in `now`'s zone stands for, as a
+/// clock hand reaches it: an hour the clocks go back through is shown twice,
+/// and it is the first showing still ahead of `now`; an hour the clocks skip
+/// is never shown, and what was due in it happens as the clock jumps past,
+/// at the first minute that exists.
+pub fn resolve_ahead<Tz: TimeZone>(local: &NaiveDateTime, now: &DateTime<Tz>) -> Option<DateTime<Tz>> {
+    let tz = now.timezone();
+    match tz.from_local_datetime(local) {
+        LocalResult::Single(at) => Some(at),
+        LocalResult::Ambiguous(first, second) => Some(if first > *now { first } else { second }),
+        LocalResult::None => {
+            (1..=180).find_map(|m| tz.from_local_datetime(&(*local + chrono::Duration::minutes(m))).earliest())
+        }
+    }
+}
+
 /// What night mode does at `now`: the dim factor to apply, if any, and how
 /// long until that answer may change (only `Auto` ever needs a wake-up).
 pub fn resolve<Tz: TimeZone>(
@@ -172,7 +188,7 @@ pub fn resolve<Tz: TimeZone>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn t(text: &str) -> TimeOfDay {
@@ -194,7 +210,7 @@ mod tests {
     /// Central European time for 2026, enough to cross both changes:
     /// summer time from 29 March to 25 October, at 01:00 UTC.
     #[derive(Debug, Clone, Copy)]
-    struct Cet;
+    pub(crate) struct Cet;
 
     impl TimeZone for Cet {
         type Offset = chrono::FixedOffset;
@@ -233,7 +249,7 @@ mod tests {
         }
     }
 
-    fn cet(m: u32, d: u32, h: u32, min: u32) -> DateTime<Cet> {
+    pub(crate) fn cet(m: u32, d: u32, h: u32, min: u32) -> DateTime<Cet> {
         Cet.with_ymd_and_hms(2026, m, d, h, min, 0).earliest().unwrap()
     }
 

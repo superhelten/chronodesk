@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::alarm;
 use crate::autostart::Autostart;
 use crate::board;
 use crate::chime;
@@ -22,7 +23,7 @@ use crate::instrument::{Cause, Instrument};
 use crate::layout::{DerivedLayout, Font, LayoutKey, Metrics};
 use crate::market::{self, BoardStyle, Market};
 use crate::matrix;
-use crate::night::{self, Schedule};
+use crate::night::{self, Schedule, TimeOfDay};
 use crate::placement;
 use crate::signal::{self, Signal};
 use crate::text::{display_family, install_display_font, label_family, measure_glyphs, paint_galley, paint_readout, spaced};
@@ -178,6 +179,8 @@ pub struct ChronoApp {
     stopwatch: Stopwatch,
     countdown: Countdown,
     alarm: Alarm,
+    /// The same three chimes for the alarm set in the menu.
+    alarm_chimes: Alarm,
     /// Chimes due, for the instrumentation; played unless a script runs this.
     chimes: u32,
     tray: Tray,
@@ -349,6 +352,7 @@ impl ChronoApp {
             locked: false,
             stopwatch,
             alarm: Alarm::default(),
+            alarm_chimes: Alarm::default(),
             chimes: 0,
             tray,
             instrument,
@@ -714,6 +718,21 @@ impl ChronoApp {
         }
     }
 
+    /// How far into its ringing the armed alarm is at `local`, if it rings.
+    fn alarm_ringing(&self, local: &DateTime<Local>) -> Option<Duration> {
+        let over = alarm::overtime(self.settings.alarm_due?, local.timestamp_millis())?;
+        (over < alarm::RING_FOR).then_some(over)
+    }
+
+    /// A click, a key or a command stops an alarm that is ringing, and it is
+    /// written down at once: it has done its job.
+    fn silence_alarm(&mut self) {
+        if self.alarm_ringing(&self.wall_clock()).is_some() {
+            self.settings.alarm_due = None;
+            self.write_config();
+        }
+    }
+
     /// Another launch found this one running. An overlay has no taskbar button
     /// to flash, so it takes the focus, wears an outline for a few seconds, and
     /// has its position checked again, which brings it back if the screen it
@@ -739,6 +758,13 @@ impl ChronoApp {
         if cmd != Command::ShowWelcome {
             self.dismiss_welcome();
         }
+        // So does anyone silencing a ringing alarm; whatever they picked still
+        // happens, which lets a new alarm time replace the one ringing. The
+        // switch acts on the check mark that was showing: clicked while it
+        // rings, it means "off", not "again tomorrow".
+        let alarm_was_on = self.settings.alarm_due.is_some();
+        self.silence_alarm();
+        let local = self.wall_clock();
         let counters_touched = matches!(cmd, Command::StartPause | Command::Reset | Command::SetTimerMinutes(_));
         let s = &mut self.settings;
         match cmd {
@@ -767,6 +793,19 @@ impl ChronoApp {
             Command::ToggleBoardLabels => s.board_labels = s.board_labels.toggled(),
             Command::ToggleRing => s.seconds_ring = !s.seconds_ring,
             Command::ToggleTimerSound => s.timer_sound = !s.timer_sound,
+            Command::ToggleAlarm => s.alarm_due = (!alarm_was_on).then(|| alarm::arm(s.alarm_at, &local)),
+            Command::SetAlarmHour(hour) => {
+                s.alarm_at = TimeOfDay::new(hour, s.alarm_at.minute()).unwrap_or(s.alarm_at);
+                s.alarm_due = Some(alarm::arm(s.alarm_at, &local));
+            }
+            Command::SetAlarmMinute(minute) => {
+                s.alarm_at = TimeOfDay::new(s.alarm_at.hour(), minute).unwrap_or(s.alarm_at);
+                s.alarm_due = Some(alarm::arm(s.alarm_at, &local));
+            }
+            Command::SetAlarm(at) => {
+                s.alarm_at = at;
+                s.alarm_due = Some(alarm::arm(at, &local));
+            }
             Command::SetSize(size) => s.size = size,
             Command::ToggleFont => s.font = s.font.toggled(),
             Command::SetFont(font) => s.font = font,
@@ -803,6 +842,12 @@ impl ChronoApp {
         }
         if counters_touched {
             self.save_counters(now);
+        }
+        let alarm_touched =
+            matches!(cmd, Command::ToggleAlarm | Command::SetAlarmHour(_) | Command::SetAlarmMinute(_) | Command::SetAlarm(_));
+        if alarm_touched {
+            // Like a running counter: a restart right after must not lose it.
+            self.write_config();
         }
         // The OS flips check items on click; re-assert our state.
         self.tray.invalidate();
@@ -891,6 +936,9 @@ impl ChronoApp {
             board_labels: s.board_labels,
             seconds_ring: s.seconds_ring,
             timer_sound: s.timer_sound,
+            alarm_at: s.alarm_at,
+            alarm_on: s.alarm_due.is_some(),
+            alarm_label: alarm::label(s.alarm_at, s.alarm_due, &self.wall_clock()),
             always_on_top: s.always_on_top,
             autostart: self.autostart_on.0,
             autostart_available: self.exe.is_some(),
@@ -1097,6 +1145,7 @@ impl eframe::App for ChronoApp {
         let key_pressed = !self.locked && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
         if background.clicked() || key_pressed {
             self.dismiss_welcome();
+            self.silence_alarm();
         }
         let hovered = !self.locked && ctx.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p));
         if hovered && let Some(cmd) = self.scroll_timer(&ctx) {
@@ -1112,6 +1161,11 @@ impl eframe::App for ChronoApp {
         // One reading of the wall clock per frame, shared by the readout and
         // the night schedule so they can never disagree about the time.
         let local = self.wall_clock();
+        let ringing = self.alarm_ringing(&local);
+        if ringing.is_none() && self.settings.alarm_due.is_some_and(|due| alarm::until(due, local.timestamp_millis()).is_none()) {
+            self.settings.alarm_due = None;
+            self.write_config();
+        }
         let night_wake = self.apply_night(local);
         let readout = self.readout(now, local);
         let painter = ui.painter().clone();
@@ -1219,6 +1273,13 @@ impl eframe::App for ChronoApp {
         } else {
             self.attention = None;
         }
+        // A ringing alarm blinks the same frame in the alarm colour, in any
+        // mode: it changes nothing in the layout, so the window keeps its size.
+        if let Some(over) = ringing
+            && over.as_millis() % 1000 < 600
+        {
+            painter.rect_stroke(rect.shrink(1.0), m.corner, Stroke::new(2.0, theme.color.alert), StrokeKind::Inside);
+        }
 
         // Dimming over a halo would eat the contrast the halo just bought, so
         // captions and closed rows are only faded when there is none; and a
@@ -1308,7 +1369,24 @@ impl eframe::App for ChronoApp {
             self.chimes += 1;
         }
         let alarm_wake = self.settings.timer_sound.then(|| self.alarm.next_in(&self.countdown, now)).flatten();
-        let wake = [readout.next_change, night_wake, alarm_wake, attention_wake].into_iter().flatten().min();
+        // The alarm was set on purpose, so it is heard whatever the timer's
+        // sound is set to. Its own wake gets a sleeping overlay there on time:
+        // the time it is due, then every blink and chime while it rings.
+        if self.alarm_chimes.due(ringing) {
+            if !self.instrument.active() {
+                chime::play();
+            }
+            self.chimes += 1;
+        }
+        let ring_wake = match ringing {
+            Some(over) => {
+                let into = (over.as_millis() % 1000) as u64;
+                let blink = Duration::from_millis(if into < 600 { 600 - into } else { 1000 - into });
+                Some(self.alarm_chimes.next_after(over).map_or(blink, |chime| chime.min(blink)))
+            }
+            None => self.settings.alarm_due.and_then(|due| alarm::until(due, local.timestamp_millis())),
+        };
+        let wake = [readout.next_change, night_wake, alarm_wake, attention_wake, ring_wake].into_iter().flatten().min();
         if let Some(next) = wake {
             ctx.request_repaint_after(next + WAKE_SLACK);
         }
@@ -1338,10 +1416,12 @@ impl eframe::App for ChronoApp {
                 },
             );
             format!(
-                "mode={} welcome={} attention={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
+                "mode={} welcome={} attention={} alarm_due={} ringing={} win_w={:.1} win_h={:.1} sw_running={} sw_ms={} cd_running={} cd_finished={} cd_remaining_ms={} {buttons}",
                 self.settings.mode.id(),
                 u8::from(self.welcome),
                 u8::from(self.attention.is_some()),
+                self.settings.alarm_due.unwrap_or(0),
+                u8::from(ringing.is_some()),
                 rect.width(),
                 rect.height(),
                 u8::from(self.stopwatch.is_running()),
@@ -1676,6 +1756,33 @@ fn minutes(min: u64) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clicking the checked "Alarm at …" while it rings means "stop": the
+    /// switch acts on the mark that was showing, not on the state that
+    /// silencing it has just left behind.
+    #[test]
+    fn switching_a_ringing_alarm_off_leaves_it_off() {
+        let ctx = egui::Context::default();
+        let now = Local::now();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), now);
+        let t0 = Instant::now();
+
+        app.settings.alarm_due = Some(now.timestamp() - 1);
+        assert!(app.alarm_ringing(&now).is_some());
+        app.apply(Command::ToggleAlarm, &ctx, t0);
+        assert_eq!(app.settings.alarm_due, None, "silenced and off, not re-armed for tomorrow");
+
+        app.apply(Command::ToggleAlarm, &ctx, t0);
+        assert!(app.settings.alarm_due.is_some_and(|due| due > now.timestamp()), "off: the switch arms it");
+        app.apply(Command::ToggleAlarm, &ctx, t0);
+        assert_eq!(app.settings.alarm_due, None, "armed: the switch disarms it");
+
+        // Picking a time while one rings replaces it.
+        app.settings.alarm_due = Some(now.timestamp() - 1);
+        app.apply(Command::SetAlarmHour(3), &ctx, t0);
+        assert!(app.settings.alarm_due.is_some_and(|due| due > now.timestamp()));
+        assert_eq!(app.settings.alarm_at.hour(), 3);
+    }
 
     #[test]
     fn mode_ids_round_trip() {

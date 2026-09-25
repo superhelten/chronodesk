@@ -16,10 +16,12 @@ use crate::clock::ClockFormat;
 use crate::icon;
 use crate::layout::Font;
 use crate::market::{Labels, Market};
-use crate::night::NightMode;
+use crate::night::{NightMode, TimeOfDay};
 use crate::theme::Palette;
 
 pub const TIMER_PRESETS: [u64; 9] = [1, 3, 5, 10, 15, 25, 30, 45, 60];
+/// The alarm's minutes in the menu; the config file takes any minute.
+pub const ALARM_MINUTE_STEP: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -46,6 +48,14 @@ pub enum Command {
     ToggleBoardLabels,
     ToggleRing,
     ToggleTimerSound,
+    /// Arms the alarm at the time last picked, or disarms it.
+    ToggleAlarm,
+    /// Picks the alarm's hour or minute, keeping the other, and arms it.
+    SetAlarmHour(u32),
+    SetAlarmMinute(u32),
+    /// Arms the alarm at an exact time (scripts; the menu picks hour and
+    /// minute separately).
+    SetAlarm(TimeOfDay),
     ToggleOnTop,
     /// Registers this exe to start at login, or removes the entry.
     ToggleAutostart,
@@ -73,6 +83,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "digital" => Command::ToggleFont,
         "ring" => Command::ToggleRing,
         "timersound" => Command::ToggleTimerSound,
+        "alarm" => Command::ToggleAlarm,
         "horizontal" => Command::ToggleBoardLayout,
         "codes" => Command::ToggleBoardLabels,
         "ontop" => Command::ToggleOnTop,
@@ -91,6 +102,9 @@ pub fn parse_command(id: &str) -> Option<Command> {
                 "palette" => Command::SetPalette(Palette::ALL.into_iter().find(|p| p.id() == value)?),
                 "night" => Command::SetNight(NightMode::ALL.into_iter().find(|n| n.id() == value)?),
                 "market" => Command::ToggleMarket(Market::ALL.into_iter().find(|m| m.id() == value)?),
+                "alarm" => Command::SetAlarm(TimeOfDay::parse(value)?),
+                "alarmhour" => Command::SetAlarmHour(value.parse().ok().filter(|h| *h < 24)?),
+                "alarmmin" => Command::SetAlarmMinute(value.parse().ok().filter(|m| *m < 60)?),
                 _ => return None,
             }
         }
@@ -120,6 +134,10 @@ pub struct MenuState {
     pub board_labels: Labels,
     pub seconds_ring: bool,
     pub timer_sound: bool,
+    /// The alarm's time, whether it is armed, and the switch's label.
+    pub alarm_at: TimeOfDay,
+    pub alarm_on: bool,
+    pub alarm_label: String,
     pub always_on_top: bool,
     pub autostart: bool,
     pub autostart_available: bool,
@@ -140,6 +158,9 @@ pub struct Tray {
     codes: CheckMenuItem,
     ring: CheckMenuItem,
     timer_sound: CheckMenuItem,
+    alarm: CheckMenuItem,
+    alarm_hours: Vec<(u32, CheckMenuItem)>,
+    alarm_minutes: Vec<(u32, CheckMenuItem)>,
     start_pause: MenuItem,
     reset: MenuItem,
     sizes: Vec<(Size, CheckMenuItem)>,
@@ -159,8 +180,9 @@ pub struct Tray {
     update: (MenuItem, PredefinedMenuItem),
     update_shown: bool,
     last_state: Option<MenuState>,
-    /// What the tray icon and its tooltip last showed: locked, and the update.
-    icon_state: Option<(bool, Option<String>)>,
+    /// What the tray icon and its tooltip last showed: locked, the update,
+    /// and the armed alarm.
+    icon_state: Option<(bool, Option<String>, Option<String>)>,
     rx: Receiver<Command>,
 }
 
@@ -224,6 +246,12 @@ impl Tray {
             Font::ALL.into_iter().map(|f| (f, check(&format!("font:{}", f.id()), f.label()))).collect();
         let ring = check("ring", "Seconds ring");
         let timer_sound = check("timersound", "Sound when finished");
+        let alarm = check("alarm", "Alarm at 07:00");
+        let alarm_hours: Vec<_> = (0..24).map(|h| (h, check(&format!("alarmhour:{h}"), &format!("{h:02}")))).collect();
+        let alarm_minutes: Vec<_> = (0..60)
+            .step_by(ALARM_MINUTE_STEP as usize)
+            .map(|m| (m, check(&format!("alarmmin:{m}"), &format!(":{m:02}"))))
+            .collect();
         let horizontal = check("horizontal", "One line");
         let codes = check("codes", "Exchange codes");
         let backdrop = check("backdrop", "Backdrop");
@@ -254,6 +282,14 @@ impl Tray {
         let face_menu = Submenu::with_items("Face", true, &face_refs).expect("face submenu");
         let palette_menu = Submenu::with_items("Colours", true, &palette_refs).expect("palette submenu");
         let night_menu = Submenu::with_items("Night mode", true, &night_refs).expect("night submenu");
+        let hour_refs: Vec<&dyn IsMenuItem> = alarm_hours.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let minute_refs: Vec<&dyn IsMenuItem> = alarm_minutes.iter().map(|(_, i)| i as &dyn IsMenuItem).collect();
+        let hour_menu = Submenu::with_items("Hour", true, &hour_refs).expect("alarm hour submenu");
+        let minute_menu = Submenu::with_items("Minute", true, &minute_refs).expect("alarm minute submenu");
+        let al1 = PredefinedMenuItem::separator();
+        let alarm_menu =
+            Submenu::with_items("Alarm", true, &[&alarm as &dyn IsMenuItem, &al1, &hour_menu, &minute_menu])
+                .expect("alarm submenu");
 
         // Everything about how the overlay looks lives in one submenu, so the
         // top level stays the short list it was.
@@ -282,6 +318,7 @@ impl Tray {
         items.extend([
             &timer_menu as &dyn IsMenuItem,
             &market_menu,
+            &alarm_menu,
             &s2,
             &start_pause,
             &reset,
@@ -321,6 +358,9 @@ impl Tray {
             codes,
             ring,
             timer_sound,
+            alarm,
+            alarm_hours,
+            alarm_minutes,
             start_pause,
             reset,
             sizes,
@@ -377,6 +417,14 @@ impl Tray {
         self.codes.set_checked(state.board_labels == Labels::Code);
         self.ring.set_checked(state.seconds_ring);
         self.timer_sound.set_checked(state.timer_sound);
+        self.alarm.set_checked(state.alarm_on);
+        self.alarm.set_text(&state.alarm_label);
+        for (hour, item) in &self.alarm_hours {
+            item.set_checked(*hour == state.alarm_at.hour());
+        }
+        for (minute, item) in &self.alarm_minutes {
+            item.set_checked(*minute == state.alarm_at.minute());
+        }
         // The board has no seconds to show.
         self.ring.set_enabled(state.mode != Mode::Market);
         let has_controls = state.mode.has_controls();
@@ -430,13 +478,17 @@ impl Tray {
             (None, false) => {}
         }
 
-        let icon_state = (state.locked, state.update.as_ref().map(|(label, _)| label.clone()));
+        let armed = state.alarm_on.then(|| state.alarm_label.clone());
+        let icon_state = (state.locked, state.update.as_ref().map(|(label, _)| label.clone()), armed);
         if self.icon_state.as_ref() != Some(&icon_state) && let Some(tray) = &self.icon {
             let mut tooltip = if state.locked {
                 "ChronoDesk — locked (click icon to unlock)".to_owned()
             } else {
                 "ChronoDesk — click icon to lock".to_owned()
             };
+            if let Some(armed) = &icon_state.2 {
+                tooltip.push_str(&format!("\n{armed}"));
+            }
             if let Some((label, _)) = &state.update {
                 tooltip.push_str(&format!("\n{label} (right-click)"));
             }
@@ -533,6 +585,20 @@ mod tests {
         assert_eq!(parse_command("codes"), Some(Command::ToggleBoardLabels));
         assert_eq!(parse_command("ring"), Some(Command::ToggleRing));
         assert_eq!(parse_command("timersound"), Some(Command::ToggleTimerSound));
+    }
+
+    #[test]
+    fn parses_alarm_ids() {
+        assert_eq!(parse_command("alarm"), Some(Command::ToggleAlarm));
+        assert_eq!(parse_command("alarm:14:35"), Some(Command::SetAlarm(TimeOfDay::new(14, 35).unwrap())));
+        assert_eq!(parse_command("alarm:7:05"), Some(Command::SetAlarm(TimeOfDay::new(7, 5).unwrap())));
+        assert_eq!(parse_command("alarmhour:0"), Some(Command::SetAlarmHour(0)));
+        assert_eq!(parse_command("alarmhour:23"), Some(Command::SetAlarmHour(23)));
+        assert_eq!(parse_command("alarmmin:55"), Some(Command::SetAlarmMinute(55)));
+        assert_eq!(parse_command("alarmhour:24"), None);
+        assert_eq!(parse_command("alarmmin:60"), None);
+        assert_eq!(parse_command("alarm:25:00"), None);
+        assert_eq!(parse_command("alarm:noon"), None);
     }
 
     #[test]

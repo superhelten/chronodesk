@@ -82,6 +82,12 @@ pub struct Config {
     pub seconds_ring: bool,
     /// Chime when the countdown reaches zero (the system's notification sound).
     pub timer_sound: bool,
+    /// The time last picked for the alarm, kept while it is off so the menu
+    /// can switch it back on at the same time.
+    pub alarm_at: TimeOfDay,
+    /// The instant the armed alarm rings, in seconds since the Unix epoch;
+    /// `None` when it is off. Cleared once it has rung.
+    pub alarm_due: Option<i64>,
     /// A stopwatch or countdown that was under way, so it survives a restart
     /// or a logout. Written by the app, not meant to be edited; `None` is idle.
     pub stopwatch: Option<Saved>,
@@ -133,6 +139,8 @@ impl Default for Config {
             board_labels: Labels::City,
             seconds_ring: false,
             timer_sound: true,
+            alarm_at: TimeOfDay::new(7, 0).expect("valid"),
+            alarm_due: None,
             stopwatch: None,
             countdown: None,
             first_run: true,
@@ -324,6 +332,8 @@ pub fn load(path: &Path) -> Loaded {
     field(&mut fields, "board_labels", &mut config.board_labels, &mut warnings);
     field(&mut fields, "seconds_ring", &mut config.seconds_ring, &mut warnings);
     field(&mut fields, "timer_sound", &mut config.timer_sound, &mut warnings);
+    field(&mut fields, "alarm_at", &mut config.alarm_at, &mut warnings);
+    field(&mut fields, "alarm_due", &mut config.alarm_due, &mut warnings);
     field(&mut fields, "stopwatch", &mut config.stopwatch, &mut warnings);
     field(&mut fields, "countdown", &mut config.countdown, &mut warnings);
     field(&mut fields, "first_run", &mut config.first_run, &mut warnings);
@@ -1012,6 +1022,26 @@ mod tests {
         };
         save(&path, &config).unwrap();
         assert_eq!(load(&path).config, config);
+    }
+
+    #[test]
+    fn the_alarm_is_off_at_seven_and_round_trips() {
+        let dir = Dir::new("alarm_fields");
+        let path = dir.file();
+        write(&path, "(schema_version:1)");
+        let loaded = load(&path);
+        assert_eq!((loaded.config.alarm_at, loaded.config.alarm_due), (TimeOfDay::new(7, 0).unwrap(), None));
+
+        let config = Config { alarm_at: TimeOfDay::new(14, 35).unwrap(), alarm_due: Some(1_800_000_000), ..Config::returning() };
+        save(&path, &config).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"14:35\""), "hand-editable");
+        assert_eq!(load(&path).config, config);
+
+        write(&path, "(schema_version:1,alarm_at:\"25:00\",alarm_due:\"soon\",timer_minutes:5)");
+        let loaded = load(&path);
+        assert_eq!((loaded.config.alarm_at, loaded.config.alarm_due), (TimeOfDay::new(7, 0).unwrap(), None));
+        assert_eq!(loaded.config.timer_minutes, 5, "the rest survives");
+        assert_eq!(loaded.warnings.len(), 2, "{:?}", loaded.warnings);
     }
 
     #[test]

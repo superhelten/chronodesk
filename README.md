@@ -74,10 +74,17 @@ Right-click the overlay or the tray icon to open the menu. Everything can be set
 | Switch mode | Menu, or `1` Clock, `2` Stopwatch, `3` Timer, `4` Markets |
 | Start/pause, reset | Hover the stopwatch or timer, or click the overlay and press `Space` / `R` |
 | Timer duration | Menu → *Timer duration*, or scroll over a stopped timer |
+| Alarm | Menu → *Alarm*: pick the hour and minute, or switch it on and off |
 | Start with Windows | Menu → *Start with Windows* |
 
 When a countdown finishes, the digits blink for half a minute and the Windows notification sound
 plays three times; *Restart* runs it again from the top. A running stopwatch or timer carries on after a restart or a reboot.
+
+The alarm rings once, at the next time the clock shows the hour and minute you picked: the sound
+plays three times, ten seconds apart, and the overlay's frame blinks, in whichever mode is showing.
+A click on the overlay, a key or any menu choice silences it. It rings even with *Sound when
+finished* off, since that switch belongs to the timer. If the overlay is closed or the PC is asleep
+when it falls due, it does not ring late.
 
 Under *Appearance* you can change the size, the face (typeface, seven-segment or dot matrix), the
 colours, the 12/24-hour format, the date line, the seconds ring and night mode, which dims the
@@ -117,6 +124,7 @@ file. If a value is invalid, that one setting falls back to its default and the 
 | `backdrop`, `chroma`, `text_outline`, `always_on_top` | `true` / `false` |
 | `timer_minutes` | 1 to 1440 |
 | `timer_sound` | `true` / `false` |
+| `alarm_at` | `"HH:MM"`, the alarm's time (default 07:00) |
 | `night` | `"off"`, `"on"`, `"auto"` |
 | `night_from`, `night_to` | `"HH:MM"`, used by `"auto"` (default 22:00 to 07:00) |
 | `night_dim` | 0.6 to 1.0 |
@@ -125,8 +133,8 @@ file. If a value is invalid, that one setting falls back to its default and the 
 | `board_layout` | `"vertical"`, `"horizontal"` |
 | `board_labels` | `"city"`, `"code"` |
 
-The file also holds the window position, the state of a running stopwatch or timer and the last
-update check, which the app manages itself.
+The file also holds the window position, the state of a running stopwatch or timer, whether the
+alarm is set (`alarm_due`) and the last update check, which the app manages itself.
 
 ## Building
 
@@ -148,6 +156,7 @@ and leaves an overlay you already have running alone.
 | `instrument-test.ps1` | frame rate in each mode, hover controls, layout caching |
 | `placement-test.ps1` | a saved position outside every screen is moved back into view |
 | `lifecycle-test.ps1` | one instance per config file, *Start with Windows* |
+| `alarm-test.ps1` | the alarm rings on time behind a sleeping mode, is silenced, and is dropped when missed |
 | `install-test.ps1` | install, upgrade and uninstall into a scratch folder and registry key |
 | `welcome-test.ps1` | the welcome card on first launch |
 | `resume-test.ps1` | a running stopwatch or timer survives the app being killed |
