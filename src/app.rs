@@ -580,7 +580,7 @@ impl eframe::App for ChronoApp {
         let buttons = show_controls.then(|| control_rects(caption_rect, &m));
         let mut pending = None;
         if show_controls {
-            pending = controls(ui, caption_rect, &m, theme, self.menu_state(now).start_label);
+            pending = controls(ui, caption_rect, &m, theme, self.counting(now));
         } else if let Some(caption_galley) = caption_galley {
             let pos = caption_rect.center() - caption_galley.size() / 2.0;
             // The caption is far smaller, so it gets the thinnest ring that

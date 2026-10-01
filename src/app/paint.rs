@@ -116,7 +116,7 @@ pub(super) fn controls(
     area: Rect,
     metrics: &Metrics,
     theme: &Theme,
-    start_label: &str,
+    counting: bool,
 ) -> Option<Command> {
     let size = metrics.control;
     let mut clicked = None;
@@ -142,7 +142,7 @@ pub(super) fn controls(
         }
         let r = rect.shrink(size * theme.ratio.control_inset);
         match cmd {
-            Command::StartPause if start_label == "Pause" => {
+            Command::StartPause if counting => {
                 let bar = vec2(r.width() * 0.3, r.height());
                 painter.rect_filled(Rect::from_min_size(r.left_top(), bar), 1.0, color);
                 painter.rect_filled(Rect::from_min_size(r.right_top() - vec2(bar.x, 0.0), bar), 1.0, color);

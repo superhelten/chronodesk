@@ -198,16 +198,28 @@ impl ChronoApp {
         Some(Command::SetTimerMinutes(min as u64))
     }
 
-    pub(super) fn menu_state(&self, now: Instant) -> MenuState {
+    /// Whether the counter on show is counting, so Start/Pause would pause it.
+    pub(super) fn counting(&self, now: Instant) -> bool {
+        match self.settings.mode {
+            Mode::Stopwatch => self.stopwatch.is_running(),
+            Mode::Timer => self.countdown.is_running(now),
+            _ => false,
+        }
+    }
+
+    fn start_label(&self, now: Instant) -> &'static str {
         let s = &self.settings;
-        let start_label = match s.mode {
-            Mode::Clock => "Start",
-            Mode::Stopwatch if self.stopwatch.is_running() => "Pause",
+        match s.mode {
             Mode::Timer if self.countdown.is_finished(now) && s.pomodoro => pomodoro::phase(s.pomodoro_phase).start_next(),
             Mode::Timer if self.countdown.is_finished(now) => "Restart",
-            Mode::Timer if self.countdown.is_running(now) => "Pause",
+            _ if self.counting(now) => "Pause",
             _ => "Start",
-        };
+        }
+    }
+
+    pub(super) fn menu_state(&self, now: Instant) -> MenuState {
+        let s = &self.settings;
+        let start_label = self.start_label(now);
         MenuState {
             locked: self.locked,
             lock_available: self.tray.lock_available(),
