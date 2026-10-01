@@ -4,6 +4,8 @@ A small, transparent always-on-top clock for the Windows desktop, styled after s
 hardware clocks: a clock, a stopwatch, a countdown timer and a **world market board** that shows which
 stock exchanges are open right now.
 
+Website: <https://superhelten.github.io/chronodesk/>
+
 <p align="center">
   <img src="docs/screenshots/board.png" width="420" alt="Market board: New York, London and Frankfurt trading, Hong Kong and Tokyo closed, in a green dot-matrix face">
   <img src="docs/screenshots/ring.gif" width="420" alt="Clock with the studio seconds ring filling up LED by LED">
@@ -202,6 +204,9 @@ time, so they can be regenerated after a visual change:
 cargo test shots -- --ignored        # renders to target/shots
 python scripts/compose-shots.py      # composes docs/screenshots (needs Pillow)
 ```
+
+The `cargo test` line also writes `target/shots/site/`, and `python scripts/site-assets.py` turns those
+renders into `site/img/`, the website that `pages.yml` publishes.
 
 ## How it works
 
