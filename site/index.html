@@ -91,29 +91,33 @@
     </header>
     <ul class="modes" role="list">
       <li class="mode">
-        <div class="desk desk--tile"><img class="desk__img" src="img/skin-digital-red.webp" width="375" height="145" loading="lazy" decoding="async" alt="Clock in red seven-segment digits with ghosted unlit segments: 10:09:37 and TUE 22 SEP, framed by the LED seconds ring"></div>
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-clock.webp" width="303" height="139" loading="lazy" decoding="async" alt="Clock in warm white type on its dark backdrop: 10:09:37 and TUE 22 SEP"></div>
+        <p class="mode__look caption">Typeface · Warm · backdrop</p>
         <h3>Clock</h3>
         <p>Time and date, 24 or 12 hours, seconds on or off. Add a second time zone after the date.</p>
       </li>
       <li class="mode">
-        <div class="desk desk--tile"><img class="desk__img" src="img/mode-stopwatch.webp" width="340" height="117" loading="lazy" decoding="async" alt="Stopwatch in yellow dot-matrix, paused at 12:34.3"></div>
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-stopwatch.webp" width="304" height="117" loading="lazy" decoding="async" alt="Stopwatch in amber seven-segment digits with ghosted unlit segments, paused at 12:34.3"></div>
+        <p class="mode__look caption">Seven-segment · Amber</p>
         <h3>Stopwatch</h3>
         <p>Start, pause and reset with a hotkey. A running stopwatch carries on after a restart or a reboot.</p>
       </li>
       <li class="mode">
-        <div class="desk desk--tile"><img class="desk__img" src="img/mode-timer.webp" width="269" height="145" loading="lazy" decoding="async" alt="Countdown timer in red seven-segment digits, framed by the LED seconds ring, paused at 04:59"></div>
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-timer.webp" width="300" height="145" loading="lazy" decoding="async" alt="Pomodoro timer in red dot-matrix, framed by the LED seconds ring: 17:12 left and FOCUS 1/4 · PAUSED"></div>
+        <p class="mode__look caption">Dot matrix · Red · seconds ring</p>
         <h3>Timer</h3>
         <p>Count down from 1 to 1440 minutes; scroll over a stopped timer to change it. Turn on Pomodoro for four focus periods with short and long breaks.</p>
       </li>
       <li class="mode">
-        <div class="desk desk--tile"><img class="desk__img" src="img/mode-board.webp" width="388" height="295" loading="lazy" decoding="async" alt="Market board in green dot-matrix: New York, London and Frankfurt trading, Hong Kong and Tokyo closed"></div>
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-board.webp" width="378" height="295" loading="lazy" decoding="async" alt="Market board in cool blue type: New York, London and Frankfurt trading, Hong Kong and Tokyo closed, and LONDON CLOSES IN 1H 45M"></div>
+        <p class="mode__look caption">Typeface · Cool · city names</p>
         <h3>Markets</h3>
         <p>Which stock exchanges are trading, on lunch break or closed, with a countdown such as “London closes in 1h 45m”. Worked out on your PC: no network, no account.</p>
       </li>
     </ul>
     <div class="strip">
       <p class="strip__text">Or as a single line, with city names or exchange codes.</p>
-      <div class="desk desk--strip" tabindex="0" role="region" aria-label="Market strip, scrolls sideways"><img class="desk__img" src="img/mode-strip.webp" width="1032" height="129" loading="lazy" decoding="async" alt="The market board as a one-line strip with exchange codes"></div>
+      <div class="desk desk--strip" tabindex="0" role="region" aria-label="Market strip, scrolls sideways"><img class="desk__img" src="img/mode-strip.webp" width="919" height="129" loading="lazy" decoding="async" alt="The market board as a one-line strip in green seven-segment digits with exchange codes: NYSE, LSE and XETRA trading, HKEX and TSE closed, and LSE CLOSES IN 1H 45M"></div>
     </div>
     <p class="footnote">Nine exchanges from New York to Sydney, with daylight saving time handled per region. Public holidays and half days are not included.</p>
   </div>
@@ -123,15 +127,18 @@
   <div class="wrap">
     <header class="section__head">
       <h2 id="skins-title">Pick a face and a colour</h2>
-      <p class="section__lead">3 faces × 8 colours, in any combination. Every picture here is rendered by ChronoDesk itself, off screen, at a pinned time.</p>
+      <p class="section__lead">3 faces × 8 colours, with or without the seconds ring and the backdrop, in any combination. Every picture here is rendered by ChronoDesk itself, off screen, at a pinned time.</p>
     </header>
     <div class="picker">
       <figure class="picker__view">
         <div class="desk stage" id="stage">
-          <img class="front" src="img/skin-matrix-green.webp" width="420" height="145" loading="lazy" decoding="async" alt="ChronoDesk clock, dot-matrix digits, Green: 10:09:37 and TUE 22 SEP, framed by the sixty-LED seconds ring">
-          <noscript><p class="stage__nojs">Turn on JavaScript to switch faces and colours.</p></noscript>
+          <img class="front" src="img/skin-matrix-green-r1-b0.webp" width="420" height="145" loading="lazy" decoding="async" alt="ChronoDesk clock, dot-matrix digits, Green: 10:09:37 and TUE 22 SEP, framed by the sixty-LED seconds ring">
+          <noscript><p class="stage__nojs">Turn on JavaScript to switch faces, colours, ring and backdrop.</p></noscript>
         </div>
-        <figcaption class="picker__cap">Size, 12/24 hours, date, seconds ring, backdrop and night dimming are in the right-click menu.</figcaption>
+        <figcaption class="picker__notes">
+          <span class="picker__cap">All of these, and size, 12/24 hours, the date and night dimming, are in the right-click menu.</span>
+          <span class="picker__hint" id="studio-hint">Without the ring, Studio looks like Green: its red is in the ring and in the stopwatch and timer digits.</span>
+        </figcaption>
       </figure>
       <form class="picker__ctl" id="picker">
         <fieldset class="opts opts--face">
@@ -155,9 +162,36 @@
             <input class="vh" type="radio" name="colour" id="colour-studio" value="studio"><label for="colour-studio"><span class="sw sw--studio" aria-hidden="true"></span>Studio</label>
           </div>
         </fieldset>
+        <fieldset class="opts opts--switch">
+          <legend class="caption">Show</legend>
+          <div class="opts__grid">
+            <input class="vh" type="checkbox" name="ring" id="sw-ring" checked><label for="sw-ring">Seconds ring<span class="tog" aria-hidden="true"></span></label>
+            <input class="vh" type="checkbox" name="backdrop" id="sw-backdrop"><label for="sw-backdrop">Backdrop<span class="tog" aria-hidden="true"></span></label>
+          </div>
+        </fieldset>
         <p class="vh" id="skin-live" aria-live="polite"></p>
       </form>
     </div>
+
+    <h3 class="looks__title" id="looks-title">More looks</h3>
+    <ul class="looks" role="list" aria-labelledby="looks-title">
+      <li class="look">
+        <div class="desk desk--look"><img class="desk__img" src="img/look-12h.webp" width="392" height="117" loading="lazy" decoding="async" alt="Clock in amber dot-matrix in 12-hour format: 10:09:37 and AM · TUE 22 SEP"></div>
+        <p>12-hour clock, with AM or PM before the date.</p>
+      </li>
+      <li class="look">
+        <div class="desk desk--look"><img class="desk__img" src="img/look-night.webp" width="303" height="139" loading="lazy" decoding="async" alt="Clock in yellow type, dimmed for the night: 10:09:37 and TUE 22 SEP"></div>
+        <p>Night dimming at the default 70 %, always or on a schedule.</p>
+      </li>
+      <li class="look">
+        <div class="desk desk--look desk--chroma"><img class="desk__img" src="img/look-chroma.webp" width="347" height="117" loading="lazy" decoding="async" alt="Clock in white seven-segment digits on pure #00FF00 green: 10:09:37 and TUE 22 SEP"></div>
+        <p>Chroma key: pure <code>#00FF00</code> behind it, for OBS to key out.</p>
+      </li>
+      <li class="look">
+        <div class="desk desk--look"><img class="desk__img" src="img/look-small.webp" width="125" height="62" loading="lazy" decoding="async" alt="Clock at the small size in red type: 10:09:37 and TUE 22 SEP"></div>
+        <p>Small, for a corner of the screen; Medium and Large too.</p>
+      </li>
+    </ul>
   </div>
 </section>
 

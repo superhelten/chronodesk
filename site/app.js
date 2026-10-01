@@ -4,46 +4,58 @@ const d = document, R = d.documentElement, $ = id => d.getElementById(id);
 R.className = R.className.replace(/\bno-js\b/, 'js');
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 
-// Skin picker; sizes are natural / 2
-const DIM = {sans: [331, 168], digital: [375, 145], matrix: [420, 145]};
+// Skin picker; sizes are natural / 2, [ring off, ring on] (the backdrop keeps the size)
+const DIM = {sans: [[303, 139], [331, 168]], digital: [[347, 117], [375, 145]], matrix: [[392, 117], [420, 145]]};
 const FACE = {sans: ['Typeface', 'typeface digits'], digital: ['Seven-segment', 'seven-segment digits'],
   matrix: ['Dot matrix', 'dot-matrix digits']};
 const COL = {default: ['Default', 'Default white'], warm: ['Warm', 'Warm'], cool: ['Cool', 'Cool blue'],
   amber: ['Amber', 'Amber'], green: ['Green', 'Green'], red: ['Red', 'Red'], yellow: ['Yellow', 'Yellow'],
-  studio: ['Studio', 'Studio colours, green time and red ring']};
+  studio: ['Studio', 'Studio colours, green time']};
 
-const form = $('picker'), stage = $('stage');
+const form = $('picker'), stage = $('stage'), hint = $('studio-hint');
 if (form && stage) {
   let front = stage.querySelector('img'), back = null, seq = 0;
   const seen = {};
-  const pick = n => (form.querySelector(`input[name="${n}"]:checked`) || {}).value;
-  const url = (f, c) => `img/skin-${f}-${c}.webp`;
+  const state = (over = {}) => {
+    const v = {};
+    form.querySelectorAll('input').forEach(i => {
+      if (i.type === 'radio') { if (i.checked) v[i.name] = i.value; } else v[i.name] = i.checked;
+    });
+    return Object.assign(v, over);
+  };
+  const url = v => `img/skin-${v.face}-${v.colour}-r${+v.ring}-b${+v.backdrop}.webp`;
+  const ok = v => COL[v.colour] && DIM[v.face];
   const hide = img => { img.alt = ''; img.setAttribute('aria-hidden', 'true'); };
   form.addEventListener('submit', e => e.preventDefault());
   form.addEventListener('change', async () => {
-    const f = pick('face'), c = pick('colour'), s = COL[c] && DIM[f], n = ++seq;
-    if (!s) return;
-    $('skin-live').textContent = `${FACE[f][0]}, ${COL[c][0]}`;
+    const v = state(), n = ++seq;
+    if (!ok(v)) return;
+    const alike = v.colour === 'studio' && !v.ring;
+    if (hint) hint.parentNode.classList.toggle('alike', alike);
+    $('skin-live').textContent = [FACE[v.face][0], COL[v.colour][0], v.ring && 'seconds ring', v.backdrop && 'backdrop']
+      .filter(Boolean).join(', ') + (alike ? `. ${hint.textContent}` : '');
     if (!back) {
       back = d.createElement('img'); hide(back); back.decoding = 'async';
       stage.insertBefore(back, front.nextSibling);
     }
     const img = back;
     img.className = 'back wait';
-    [img.width, img.height] = s;
-    img.src = url(f, c);
+    [img.width, img.height] = DIM[v.face][+v.ring];
+    img.src = url(v);
     try { await img.decode(); } catch (e) { return; }
     if (n !== seq) return;
-    img.alt = `ChronoDesk clock, ${FACE[f][1]}, ${COL[c][1]}: 10:09:37 and TUE 22 SEP, framed by the sixty-LED seconds ring`;
+    img.alt = `ChronoDesk clock, ${FACE[v.face][1]}, ${COL[v.colour][1]}: 10:09:37 and TUE 22 SEP` +
+      (v.ring ? `, framed by the sixty-LED seconds ring${v.colour === 'studio' ? ' in red' : ''}` : '') +
+      (v.backdrop ? ', on its dark backdrop' : '');
     img.removeAttribute('aria-hidden');
     hide(front);
     img.className = 'front'; front.className = 'back';
     [back, front] = [front, img];
   });
+  // What a click on the input would show: its radio value, or its switch flipped.
   const preload = i => {
-    const f = i.name === 'face' ? i.value : pick('face'), c = i.name === 'colour' ? i.value : pick('colour');
-    const u = url(f, c);
-    if (!seen[u] && COL[c] && DIM[f]) { seen[u] = 1; new Image().src = u; }
+    const v = state({[i.name]: i.type === 'radio' ? i.value : !i.checked}), u = url(v);
+    if (!seen[u] && ok(v)) { seen[u] = 1; new Image().src = u; }
   };
   form.querySelectorAll('input').forEach(i => {
     i.addEventListener('focus', () => preload(i));
