@@ -24,6 +24,11 @@
 //! Windows but it can be renamed, so the old one is moved aside first and the
 //! swap works even if some other copy of it is still running.
 //!
+//! The exe moved aside is kept until the new one has drawn its first frame.
+//! One that exits or stays silent instead is replaced by the previous exe
+//! again, which is started in its place: an upgrade never leaves the user
+//! without an overlay that works.
+//!
 //! Settings are not part of the installation: they stay in
 //! `%APPDATA%\chronodesk` through upgrades and after an uninstall.
 
@@ -43,6 +48,10 @@ const OLD_NAME: &str = "chronodesk.exe.old";
 const NEW_NAME: &str = "chronodesk.exe.new";
 /// How long a running overlay gets to save and exit before its exe is replaced.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a new version gets to draw its first frame before the previous one
+/// is put back. It normally takes a fraction of a second; this is for a slow
+/// machine busy with something else.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -111,18 +120,30 @@ pub enum Installed {
 }
 
 /// Copies `source` into place and registers it. `config` names the overlay
-/// that has to let go of the old exe first.
-pub fn install(layout: &Layout, source: &Path, config: Option<&Path>) -> io::Result<Installed> {
+/// that has to let go of the old exe first. The setup itself uses
+/// [`install_keeping`], so it can put the old exe back.
+#[cfg(test)]
+fn install(layout: &Layout, source: &Path, config: Option<&Path>) -> io::Result<Installed> {
+    let (outcome, previous) = install_keeping(layout, source, config)?;
+    // Fails while the old exe is still running; the next install or the
+    // uninstaller picks it up.
+    if let Some(previous) = previous {
+        let _ = fs::remove_file(previous);
+    }
+    Ok(outcome)
+}
+
+/// [`install`], leaving the exe it replaced in place, for [`start_or_roll_back`].
+fn install_keeping(layout: &Layout, source: &Path, config: Option<&Path>) -> io::Result<(Installed, Option<PathBuf>)> {
     fs::create_dir_all(&layout.dir)?;
     let target = layout.exe();
-    let outcome = if same_file(source, &target) || same_contents(source, &target) {
-        Installed::AlreadyCurrent
+    let (outcome, previous) = if same_file(source, &target) || same_contents(source, &target) {
+        (Installed::AlreadyCurrent, None)
     } else {
         if let Some(config) = config {
             quit_running(config, QUIT_TIMEOUT);
         }
-        replace_exe(source, &layout.dir)?;
-        Installed::Copied
+        (Installed::Copied, replace_exe(source, &layout.dir)?)
     };
 
     let icon = layout.dir.join(ICON_NAME);
@@ -135,7 +156,64 @@ pub fn install(layout: &Layout, source: &Path, config: Option<&Path>) -> io::Res
     }
     register(layout, &target, &icon)?;
     layout.autostart.repoint(&target)?;
-    Ok(outcome)
+    Ok((outcome, previous))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Started {
+    /// The new exe drew its first frame; the previous one is gone.
+    Confirmed,
+    /// It did not, and the previous exe is back in its place and running.
+    RolledBack,
+}
+
+/// Starts the installed exe and waits for its first frame. One that exits or
+/// says nothing within `timeout` is stopped, `previous` is moved back over it
+/// and started instead.
+fn start_or_roll_back(
+    layout: &Layout,
+    previous: &Path,
+    args: &[&String],
+    config: &Path,
+    timeout: Duration,
+) -> io::Result<Started> {
+    // Before the start, so a word that comes quickly is not missed.
+    let ready = signal::Ready::expect(config);
+    let mut child = start(layout, args)?;
+    let deadline = Instant::now() + timeout;
+    // Without the event there is no telling, and the new exe is trusted.
+    let up = ready.as_ref().is_none_or(|ready| loop {
+        if ready.wait(Duration::from_millis(100)) {
+            return true;
+        }
+        if !matches!(child.try_wait(), Ok(None)) || Instant::now() >= deadline {
+            return false;
+        }
+    });
+    if up {
+        let _ = fs::remove_file(previous);
+        return Ok(Started::Confirmed);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    fs::rename(previous, layout.exe())?;
+    start(layout, args)?;
+    Ok(Started::RolledBack)
+}
+
+/// Starts the installed copy in its own folder: it runs for days, and would
+/// otherwise hold on to wherever the setup was run from, a USB stick or a
+/// Downloads folder the user wants to delete.
+fn start(layout: &Layout, args: &[&String]) -> io::Result<std::process::Child> {
+    std::process::Command::new(layout.exe())
+        .args(args)
+        .current_dir(&layout.dir)
+        // Nothing to say on a console, and a pipe it inherited from whoever
+        // ran the setup would be held open for as long as it runs.
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
 }
 
 /// Removes what [`install`] put there. The directory itself can only go once
@@ -196,8 +274,9 @@ fn quit_running(config: &Path, timeout: Duration) -> bool {
 }
 
 /// New exe in, old exe out of the way. At every point there is a complete
-/// `chronodesk.exe` or none, never half of one.
-fn replace_exe(source: &Path, dir: &Path) -> io::Result<()> {
+/// `chronodesk.exe` or none, never half of one. Returns where the old exe
+/// went, if there was one; it is left there for the caller.
+fn replace_exe(source: &Path, dir: &Path) -> io::Result<Option<PathBuf>> {
     let (target, new) = (dir.join(EXE_NAME), dir.join(NEW_NAME));
     fs::copy(source, &new)?;
     // Left by earlier upgrades if their exe was still running then. One that
@@ -208,21 +287,21 @@ fn replace_exe(source: &Path, dir: &Path) -> io::Result<()> {
         .map(|n| if n == 1 { dir.join(OLD_NAME) } else { dir.join(format!("{OLD_NAME}{n}")) })
         .find(|path| !path.exists())
         .expect("a free name");
-    if target.exists()
-        && let Err(err) = fs::rename(&target, &old)
+    let previous = target.exists().then_some(old);
+    if let Some(old) = &previous
+        && let Err(err) = fs::rename(&target, old)
     {
         let _ = fs::remove_file(&new);
         return Err(err);
     }
     if let Err(err) = fs::rename(&new, &target) {
-        let _ = fs::rename(&old, &target);
+        if let Some(old) = &previous {
+            let _ = fs::rename(old, &target);
+        }
         let _ = fs::remove_file(&new);
         return Err(err);
     }
-    // Fails while the old exe is still running; the next install or the
-    // uninstaller picks it up.
-    let _ = fs::remove_file(&old);
-    Ok(())
+    Ok(previous)
 }
 
 /// The exes earlier upgrades moved aside: `chronodesk.exe.old`, and
@@ -296,18 +375,25 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
         Action::Install => {
             let upgrade = layout.exe().exists();
             let was_running = config.is_some_and(|config| instance::acquire(config).is_none());
-            match install(&layout, &current, config) {
+            match install_keeping(&layout, &current, config) {
                 // Nothing was replaced and the overlay is running the same exe:
                 // a quiet run has nothing to add, and asking it to show itself
                 // would take the focus from whoever is using the machine.
-                Ok(Installed::AlreadyCurrent) if quiet && was_running => 0,
-                Ok(_) => {
+                Ok((Installed::AlreadyCurrent, _)) if quiet && was_running => 0,
+                Ok((_, previous)) => {
+                    // Kept for a rollback only when the new exe is started below.
+                    let discard = |previous: Option<PathBuf>| {
+                        if let Some(previous) = previous {
+                            let _ = fs::remove_file(previous);
+                        }
+                    };
                     // An overlay that neither quit nor answers is a build from
                     // before it listened; the new exe would only step aside for it.
                     let deaf = config.is_some_and(|config| {
                         instance::acquire(config).is_none() && !signal::send(config, Signal::Show)
                     });
                     if deaf {
+                        discard(previous);
                         report(
                             "ChronoDesk was installed, but an older copy is still running. \
                              Quit it from its tray icon, then start ChronoDesk from the Start menu.",
@@ -319,21 +405,39 @@ pub fn run(action: Action, args: &[String], config: Option<&Path>) -> i32 {
                     // had closed stays closed. A first installation starts it,
                     // since seeing it is what installing it was for.
                     if quiet && upgrade && !was_running {
+                        discard(previous);
                         return 0;
                     }
                     // The installed copy takes it from here: it becomes the overlay,
                     // or finds one running and asks it to show itself. Anything else
                     // on the command line was meant for it.
-                    let passed_on = args.iter().filter(|arg| !matches!(arg.as_str(), "--install" | "--quiet"));
-                    // Started in its own folder: it runs for days, and would
-                    // otherwise hold on to wherever the setup was run from, a USB
-                    // stick or a Downloads folder the user wants to delete.
-                    let started = std::process::Command::new(layout.exe()).args(passed_on).current_dir(&layout.dir).spawn();
-                    if let Err(err) = started {
-                        report(&format!("ChronoDesk was installed but could not be started: {err}"), true);
-                        return 1;
+                    let passed_on: Vec<&String> =
+                        args.iter().filter(|arg| !matches!(arg.as_str(), "--install" | "--quiet")).collect();
+                    let started = match (previous, config) {
+                        (Some(previous), Some(config)) => {
+                            start_or_roll_back(&layout, &previous, &passed_on, config, START_TIMEOUT)
+                        }
+                        (previous, _) => {
+                            discard(previous);
+                            start(&layout, &passed_on).map(|_| Started::Confirmed)
+                        }
+                    };
+                    match started {
+                        Ok(Started::Confirmed) => 0,
+                        Ok(Started::RolledBack) => {
+                            // Said even when quiet: someone clicked "Update now",
+                            // saw the overlay go and the old one come back, and
+                            // would otherwise take it for an update that did nothing.
+                            let text = "The new version of ChronoDesk did not start, so the previous one was put back.";
+                            eprintln!("ChronoDesk: {text}");
+                            message(text, true);
+                            1
+                        }
+                        Err(err) => {
+                            report(&format!("ChronoDesk was installed but could not be started: {err}"), true);
+                            1
+                        }
                     }
-                    0
                 }
                 Err(err) => {
                     report(&format!("ChronoDesk could not be installed in {}: {err}", layout.dir.display()), true);
@@ -652,6 +756,85 @@ mod tests {
         drop(held);
         assert_eq!(install(&layout, &scratch.source("three.exe", b"version three"), None).unwrap(), Installed::Copied);
         assert!(!layout.dir.join(OLD_NAME).exists(), "the leftover goes with the next upgrade");
+    }
+
+    /// Puts a copy of a Windows program where an install of ChronoDesk would
+    /// be, as the new exe, and another beside it as the one it replaced. Two
+    /// harmless programs stand in for a version that works and one that
+    /// does not, since neither says it is up unless the test does.
+    #[cfg(windows)]
+    fn stand_ins(layout: &Layout, new: &str, previous: &str) -> PathBuf {
+        let system = PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        fs::create_dir_all(&layout.dir).unwrap();
+        fs::copy(system.join(new), layout.exe()).unwrap();
+        let old = layout.dir.join(OLD_NAME);
+        fs::copy(system.join(previous), &old).unwrap();
+        old
+    }
+
+    #[cfg(windows)]
+    fn config_for(scratch: &Scratch) -> PathBuf {
+        scratch.root.join("config").join("app.ron")
+    }
+
+    /// A new version that exits before its first frame is swapped back out.
+    #[cfg(windows)]
+    #[test]
+    fn a_new_version_that_exits_at_once_is_rolled_back() {
+        let scratch = Scratch::new("rollback_exit");
+        let layout = scratch.layout();
+        let previous = stand_ins(&layout, "hostname.exe", "whoami.exe");
+        let restored = fs::read(&previous).unwrap();
+
+        let started = start_or_roll_back(&layout, &previous, &[], &config_for(&scratch), Duration::from_secs(10));
+        assert_eq!(started.unwrap(), Started::RolledBack);
+        assert_eq!(fs::read(layout.exe()).unwrap(), restored, "the previous exe is back");
+        assert!(!previous.exists());
+    }
+
+    /// One that runs but never draws is stopped once its time is up.
+    #[cfg(windows)]
+    #[test]
+    fn a_new_version_that_never_says_it_is_up_is_rolled_back() {
+        let scratch = Scratch::new("rollback_silent");
+        let layout = scratch.layout();
+        let previous = stand_ins(&layout, "ping.exe", "whoami.exe");
+        let restored = fs::read(&previous).unwrap();
+        let args = ["-n", "30", "127.0.0.1"].map(String::from);
+
+        let begun = Instant::now();
+        let started =
+            start_or_roll_back(&layout, &previous, &args.iter().collect::<Vec<_>>(), &config_for(&scratch), Duration::from_millis(500));
+        assert_eq!(started.unwrap(), Started::RolledBack);
+        assert!(begun.elapsed() < Duration::from_secs(10), "it was stopped, not waited out");
+        assert_eq!(fs::read(layout.exe()).unwrap(), restored);
+    }
+
+    /// One that draws its first frame stays, and the previous exe goes.
+    #[cfg(windows)]
+    #[test]
+    fn a_new_version_that_says_it_is_up_is_kept() {
+        let scratch = Scratch::new("rollback_ok");
+        let layout = scratch.layout();
+        let previous = stand_ins(&layout, "ping.exe", "whoami.exe");
+        let installed = fs::read(layout.exe()).unwrap();
+        let config = config_for(&scratch);
+        let args = ["-n", "2", "127.0.0.1"].map(String::from);
+
+        let announcer = {
+            let config = config.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                signal::announce_ready(&config);
+            })
+        };
+        let started = start_or_roll_back(&layout, &previous, &args.iter().collect::<Vec<_>>(), &config, Duration::from_secs(10));
+        announcer.join().unwrap();
+        assert_eq!(started.unwrap(), Started::Confirmed);
+        assert_eq!(fs::read(layout.exe()).unwrap(), installed);
+        assert!(!previous.exists(), "nothing to roll back to any more");
+        // Let the stand-in finish, so the scratch folder can go.
+        std::thread::sleep(Duration::from_millis(1500));
     }
 
     /// Open without sharing delete: what a leftover exe that is still running

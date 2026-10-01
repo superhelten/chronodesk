@@ -69,11 +69,39 @@ pub fn send(config: &Path, signal: Signal) -> bool {
     imp::send(&name_for(config, signal))
 }
 
+/// The other direction: the word a freshly started overlay gives the setup
+/// that started it, once it has drawn its first frame. Until then an update
+/// is not known to work.
+fn ready_name(config: &Path) -> String {
+    format!("{}-ready", instance::name_for(config))
+}
+
+/// The setup's end of [`announce_ready`], created before the new exe starts so
+/// that an early word is kept.
+pub struct Ready(imp::Event);
+
+impl Ready {
+    pub fn expect(config: &Path) -> Option<Self> {
+        imp::Event::create(&ready_name(config)).map(Self)
+    }
+
+    /// True once the overlay has said it is up, waiting at most `timeout`.
+    pub fn wait(&self, timeout: std::time::Duration) -> bool {
+        self.0.wait(timeout)
+    }
+}
+
+/// Tells a setup waiting on `config`, if there is one, that this overlay is up.
+pub fn announce_ready(config: &Path) {
+    imp::send(&ready_name(config));
+}
+
 #[cfg(windows)]
 mod imp {
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{
         CreateEventW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent, WaitForMultipleObjects,
+        WaitForSingleObject,
     };
 
     fn wide(text: &str) -> Vec<u16> {
@@ -118,6 +146,31 @@ mod imp {
         }
     }
 
+    /// One auto-reset event, closed when dropped.
+    pub struct Event(isize);
+
+    impl Event {
+        pub fn create(name: &str) -> Option<Self> {
+            let name = wide(name);
+            // SAFETY: `name` is NUL-terminated and outlives the call.
+            let handle = unsafe { CreateEventW(std::ptr::null(), 0, 0, name.as_ptr()) };
+            (handle != 0).then_some(Self(handle))
+        }
+
+        pub fn wait(&self, timeout: std::time::Duration) -> bool {
+            let ms = u32::try_from(timeout.as_millis()).unwrap_or(INFINITE - 1);
+            // SAFETY: a valid event handle, owned by `self`.
+            unsafe { WaitForSingleObject(self.0, ms) == WAIT_OBJECT_0 }
+        }
+    }
+
+    impl Drop for Event {
+        fn drop(&mut self) {
+            // SAFETY: created by `Event::create` and closed only here.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
     pub fn send(name: &str) -> bool {
         let name = wide(name);
         // SAFETY: `name` is NUL-terminated; the handle is closed before returning.
@@ -136,6 +189,18 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     pub struct Events;
+
+    pub struct Event;
+
+    impl Event {
+        pub fn create(_name: &str) -> Option<Self> {
+            None
+        }
+
+        pub fn wait(&self, _timeout: std::time::Duration) -> bool {
+            false
+        }
+    }
 
     impl Events {
         pub fn create(_names: [String; 2]) -> Option<Self> {
@@ -179,6 +244,19 @@ mod tests {
         assert!(send(&config, Signal::Quit));
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(Signal::Quit));
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "one signal, one delivery");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_setup_hears_when_the_overlay_it_started_is_up() {
+        use std::time::Duration;
+
+        let config = std::env::temp_dir().join(format!("chronodesk-signal-ready-{}", std::process::id())).join("app.ron");
+        let ready = Ready::expect(&config).expect("event");
+        assert!(!ready.wait(Duration::from_millis(50)), "nothing said yet");
+        announce_ready(&config);
+        assert!(ready.wait(Duration::from_secs(2)));
+        assert!(!ready.wait(Duration::from_millis(50)), "one word, heard once");
     }
 
     /// The window takes a moment to build after the guard is taken; the

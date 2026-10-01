@@ -202,6 +202,11 @@ a green dot on the tray icon. Clicking it downloads the release's
 redirect to GitHub's file host, capped at 32 MB), and runs the setup with
 `--quiet` only if both check out. The setup then takes the usual upgrade
 path: it asks this overlay to quit, replaces the exe and starts the new one.
+The exe it replaced is kept until the new one has drawn its first frame, which
+it announces through a named event the setup waits on. A new version that
+exits first, or says nothing for 30 seconds, is stopped and the previous exe
+is moved back and started instead, so an update cannot leave the user without
+an overlay that runs.
 
 The check is what makes that safe. The exe is not Authenticode-signed, so
 Windows would not stop a replaced file, and "fetch from GitHub and execute" is

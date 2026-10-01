@@ -122,6 +122,9 @@ pub struct ChronoApp {
     /// The update's setup while it runs. It ends this overlay before it is
     /// done; one that ends while the overlay is still here did not go through.
     update_setup: Option<std::process::Child>,
+    /// The config file a setup that started this overlay waits on, until the
+    /// first frame tells it the upgrade works; see `install`.
+    announce_ready: Option<PathBuf>,
     /// The global hotkeys while they are registered, and whether they are
     /// meant to be: they can be wanted and still missing, when Windows
     /// refused them.
@@ -195,6 +198,7 @@ impl ChronoApp {
         app.updates_allowed = updates_allowed;
         app.hotkeys_allowed = !app.instrument.active();
         app.installed = installed;
+        app.announce_ready = config_path;
         app.dirty_since = repaired.then(Instant::now);
         Ok(app)
     }
@@ -249,6 +253,7 @@ impl ChronoApp {
             update_step: UpdateStep::Offered,
             update_download: None,
             update_setup: None,
+            announce_ready: None,
             installed: false,
             hotkeys: None,
             hotkeys_wanted: false,
@@ -688,6 +693,9 @@ impl eframe::App for ChronoApp {
         });
 
         instrument::reached(Milestone::FirstFrame);
+        if let Some(config) = self.announce_ready.take() {
+            signal::announce_ready(&config);
+        }
 
         // Last: this blocks in a native modal loop until the menu closes.
         if background.secondary_clicked() {
