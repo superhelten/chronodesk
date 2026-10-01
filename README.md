@@ -4,47 +4,24 @@ A small, transparent always-on-top clock for the Windows desktop, styled after s
 hardware clocks: a clock, a stopwatch, a countdown timer and a **world market board** that shows which
 stock exchanges are open right now.
 
-Website: <https://superhelten.github.io/chronodesk/>
+**[Download for Windows](https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk-Setup.exe)**
+· [Website](https://superhelten.github.io/chronodesk/) · [All releases](../../releases)
 
 <p align="center">
   <img src="docs/screenshots/ring.gif" width="420" alt="Clock in green dot-matrix with the studio seconds ring filling up LED by LED in red">
   <img src="docs/screenshots/board.png" width="420" alt="Market board in a cool blue typeface: New York, London and Frankfurt trading, Hong Kong and Tokyo closed">
 </p>
-<p align="center">
-  <img src="docs/screenshots/strip.png" width="860" alt="The board as a one-line strip with exchange codes, in green seven-segment digits">
-</p>
-<p align="center">
-  <img src="docs/screenshots/clock.png" width="270" alt="Clock in a warm typeface on its dark backdrop plate">
-  <img src="docs/screenshots/timer.png" width="270" alt="Pomodoro timer in red dot-matrix with the seconds ring: focus period 1 of 4, paused">
-  <img src="docs/screenshots/stopwatch.png" width="270" alt="Stopwatch in amber seven-segment digits, paused">
-</p>
-
-Three faces in eight colours, with or without the seconds ring and the backdrop:
-
-<p align="center">
-  <img src="docs/screenshots/faces.png" width="860" alt="The clock in the plain typeface, seven-segment and dot-matrix faces, each in four of the eight colour presets">
-</p>
-<p align="center">
-  <img src="docs/screenshots/look-12h.png" width="205" alt="12-hour clock with AM before the date, in amber dot-matrix">
-  <img src="docs/screenshots/look-night.png" width="205" alt="Night mode: the clock dimmed to 70 percent">
-  <img src="docs/screenshots/look-chroma.png" width="205" alt="Chroma key: white seven-segment digits on pure green for streaming software">
-  <img src="docs/screenshots/look-small.png" width="205" alt="The small size, in a red typeface">
-</p>
 
 - **Market board:** local time and trading status for nine exchanges from New York to Sydney,
-  with a countdown to the next open or close. Computed locally, with no network access and no
-  account.
+  with a countdown to the next open or close. Computed on your PC, with no network and no account.
 - **Clock and timers:** a second time zone after the date, a one-shot alarm, and a Pomodoro cycle
   on the timer.
-- **Hardware looks:** three faces (dot-matrix and seven-segment LEDs with ghosted unlit segments,
-  or a plain typeface), eight colour presets (default, warm, cool, amber, and the LED green, red,
-  yellow and studio green/red), a studio seconds ring with sixty LEDs and an optional dark backdrop
-  plate. Try every combination on the [website](https://superhelten.github.io/chronodesk/#skins).
-- **Stays out of the way:** click-through lock with hotkeys that still reach it, night dimming, chroma-key background for streaming,
-  a stopwatch or timer that survives a reboot, and a chime when the timer runs out.
-- **Light:** one ~5.8 MB exe with no assets, ~50 MB RAM, one frame per second when idle. No admin
-  rights, no telemetry. The only network use is one request a day to see if there is a new release,
-  which can be switched off.
+- **Hardware looks:** three faces (dot-matrix and seven-segment LEDs, or a plain typeface), eight
+  colour presets, a studio seconds ring with sixty LEDs and an optional dark backdrop.
+- **Stays out of the way:** click-through lock with hotkeys that still reach it, night dimming,
+  a chroma-key background for streaming, and a stopwatch or timer that survives a reboot.
+- **Light:** one ~5.8 MB exe, ~50 MB RAM, one frame per second when idle. No admin rights, no
+  telemetry.
 
 **Windows 10 and 11 only** for now.
 
@@ -52,34 +29,25 @@ Three faces in eight colours, with or without the seconds ring and the backdrop:
 
 Download from the [latest release](../../releases/latest):
 
-- **`ChronoDesk-Setup.exe`** installs the app. It copies itself to `%LOCALAPPDATA%\ChronoDesk`,
-  adds a Start menu shortcut and an entry under *Installed apps*, and starts the overlay. It does
-  not need administrator rights.
-- **`ChronoDesk.exe`** is the portable version. Put it anywhere and run it; nothing is installed.
+- **`ChronoDesk-Setup.exe`** installs the app for your user in `%LOCALAPPDATA%\ChronoDesk`, adds a
+  Start menu shortcut and an entry under *Installed apps*, and starts it. No administrator rights
+  needed.
+- **`ChronoDesk.exe`** is the same program as a portable exe: run it from anywhere, nothing is
+  installed.
 
-Both are the same program. `SHA256SUMS.txt` lists their checksums.
+The exes are not code-signed, so Windows SmartScreen may warn the first time. Choose
+*More info → Run anyway*. `SHA256SUMS.txt` in the release lists their checksums.
 
 To uninstall, use *Settings → Apps → Installed apps*, or run `chronodesk.exe --uninstall`. Your
 settings in `%APPDATA%\chronodesk` are left in place.
 
-The exes are not code-signed yet, so Windows SmartScreen may warn about an unrecognised app. Choose
-*More info → Run anyway*.
-
 ### Updates
 
-Once a day ChronoDesk asks GitHub which release is the latest. When there is a newer one, the tray
-icon gets a green dot and the menu starts with *Update to ChronoDesk x.y.z now*. Clicking it
-downloads the new setup, checks it and installs it: the overlay closes and the new version starts
-in its place, with your settings. Nothing is downloaded until you click.
-
-Every release is signed with a key that is kept offline, not on GitHub, and the app installs an
-update only when its signature and checksum match. If they do not, or you use the portable exe,
-the item opens the release page instead, to download the setup by hand.
-
-The daily request goes to `github.com/superhelten/chronodesk/releases/latest` and sends nothing but
-the app's name and version. It can be switched off under *Check for updates* in the menu. You can
-also watch the repository on GitHub (*Watch → Custom → Releases*) to hear about new versions by
-e-mail; versions before 0.2.0 do not check by themselves.
+Once a day ChronoDesk asks GitHub whether there is a newer release, sending nothing but its name
+and version. When there is, the tray icon gets a green dot and the menu offers *Update to
+ChronoDesk x.y.z now*: one click downloads it, checks its signature and installs it, keeping your
+settings. Nothing downloads until you click, and the portable exe opens the release page instead.
+Switch the check off under *Check for updates*.
 
 ## Using it
 
@@ -97,27 +65,44 @@ Right-click the overlay or the tray icon to open the menu. Everything can be set
 | Start with Windows | Menu → *Start with Windows* |
 
 When a countdown finishes, the digits blink for half a minute and the Windows notification sound
-plays three times; *Restart* runs it again from the top. A running stopwatch or timer carries on after a restart or a reboot.
+plays three times; *Restart* runs it again. A running stopwatch or timer carries on after a restart
+or a reboot.
 
-*Timer duration → Pomodoro cycle* turns the timer into a Pomodoro timer: four focus periods of the
-chosen duration, a short break after each of the first three and a long one after the fourth. At
-25 minutes the breaks are 5 and 15 minutes, and they scale with other durations. The caption says
-where you are ("FOCUS 2/4", "BREAK"). A period that runs out chimes like any timer and waits;
-*Start break* or *Start focus* begins the next one. *Reset* starts the period over, and pressed
-again, the whole cycle.
+*Timer duration → Pomodoro cycle* turns the timer into four focus periods, with a short break after
+each of the first three and a long one after the fourth (5 and 15 minutes at 25-minute focus; they
+scale with other durations). A finished period waits for *Start*. *Reset* restarts the period, and
+pressed again, the whole cycle.
 
-The alarm rings once, at the next time the clock shows the hour and minute you picked: the sound
-plays three times, ten seconds apart, and the overlay's frame blinks, in whichever mode is showing.
-A click on the overlay, a key or any menu choice silences it. It rings even with *Sound when
-finished* off, since that switch belongs to the timer. If the overlay is closed or the PC is asleep
-when it falls due, it does not ring late.
+The alarm rings once, at the next time the clock shows the hour and minute you picked: three chimes
+ten seconds apart and a blinking frame. A click, a key or any menu choice silences it. If the PC is
+asleep or the overlay is closed at that moment, it does not ring late.
+
+<p align="center">
+  <img src="docs/screenshots/clock.png" width="270" alt="Clock in a warm typeface on its dark backdrop plate">
+  <img src="docs/screenshots/timer.png" width="270" alt="Pomodoro timer in red dot-matrix with the seconds ring: focus period 1 of 4, paused">
+  <img src="docs/screenshots/stopwatch.png" width="270" alt="Stopwatch in amber seven-segment digits, paused">
+</p>
 
 Under *Appearance* you can change the size, the face (typeface, seven-segment or dot matrix), the
-colours, the 12/24-hour format, the date line, the seconds ring and night mode, which dims the
-readout on a schedule. *Second time zone* adds another city's time after the date, such as
-"TOKYO 03:30 +1", marked when its date differs from yours. *Chroma key background* fills the window with pure green for use as a
-source in streaming software. Over the key the green presets are drawn in white, because a
-keyer would remove the lime along with the background.
+eight colour presets, the 12/24-hour format, the date line, the seconds ring, the backdrop and
+night mode, which dims the readout on a schedule.
+
+*Second time zone* adds another city's time after the date, such as "TOKYO 03:30 +1", marked when
+its date differs from yours. *Chroma key background* fills the window with pure green for streaming
+software; the green presets are then drawn in white, since the keyer would remove them too.
+
+<p align="center">
+  <img src="docs/screenshots/faces.png" width="860" alt="The clock in the plain typeface, seven-segment and dot-matrix faces, each in four of the eight colour presets">
+</p>
+<p align="center">
+  <img src="docs/screenshots/look-12h.png" width="205" alt="12-hour clock with AM before the date, in amber dot-matrix">
+  <img src="docs/screenshots/look-night.png" width="205" alt="Night mode: the clock dimmed to 70 percent">
+  <img src="docs/screenshots/look-chroma.png" width="205" alt="Chroma key: white seven-segment digits on pure green for streaming software">
+  <img src="docs/screenshots/look-small.png" width="205" alt="The small size, in a red typeface">
+</p>
+
+Every combination of face, colour, ring and backdrop is on the
+[website](https://superhelten.github.io/chronodesk/#skins).
 
 ### Market board
 
@@ -126,13 +111,17 @@ trading, amber during a lunch break, hollow when closed. The line underneath say
 next, such as "London closes in 1h 45m".
 
 The built-in exchanges are New York, London, Oslo, Frankfurt, Mumbai, Shanghai, Hong Kong, Tokyo
-and Sydney. The board starts with New York, London, Frankfurt, Hong Kong and Tokyo; choose
-which ones to show under *Exchanges*, where you can also lay the board out on
-one line and show exchange codes (NYSE, LSE, OSE…) instead of city names.
+and Sydney. The board starts with New York, London, Frankfurt, Hong Kong and Tokyo; choose which
+ones to show under *Exchanges*, where you can also put the board on one line and show exchange
+codes (NYSE, LSE, OSE…) instead of city names.
 
 Opening hours are regular weekday sessions, including lunch breaks, with daylight saving time
 handled for each region. **Public holidays and half days are not included**, so on a holiday the
 board will show an exchange as open.
+
+<p align="center">
+  <img src="docs/screenshots/strip.png" width="860" alt="The board as a one-line strip with exchange codes, in green seven-segment digits">
+</p>
 
 ## Configuration
 
@@ -171,62 +160,18 @@ alarm is set (`alarm_due`) and the last update check, which the app manages itse
 Requires Rust 1.95 or newer.
 
 ```sh
-cargo run --release              # build and run the overlay
-cargo test                       # unit tests
-pwsh -File scripts/package.ps1   # dist\: setup and portable exe, SHA256SUMS.txt
+cargo run --release   # build and run the overlay
+cargo test            # unit tests
 ```
 
-The scripts in `scripts/` test the running app end to end. They need a build with
-`--features instrument`, which lets them drive the app over a local connection instead of moving
-the real mouse; a normal build contains none of this. Each script runs against its own config file
-and leaves an overlay you already have running alone.
-
-| Script | Checks |
-| --- | --- |
-| `instrument-test.ps1` | frame rate in each mode, hover controls, layout caching |
-| `placement-test.ps1` | a saved position outside every screen is moved back into view |
-| `lifecycle-test.ps1` | one instance per config file, *Start with Windows* |
-| `alarm-test.ps1` | the alarm rings on time behind a sleeping mode, is silenced, and is dropped when missed |
-| `install-test.ps1` | install, upgrade and uninstall into a scratch folder and registry key |
-| `welcome-test.ps1` | the welcome card on first launch |
-| `resume-test.ps1` | a running stopwatch or timer survives the app being killed |
-| `chime-test.ps1` | the timer chime (counted, not played) |
-| `pomodoro-test.ps1` | the Pomodoro cycle moves on, waits, survives a kill, and resets |
-| `startup-time.ps1` | how long a launch takes to put its first frame up |
-
-Run them with PowerShell 7 (`pwsh`).
-
-### Releasing
-
-Push a tag `vX.Y.Z` matching the version in `Cargo.toml`; the release workflow builds the exes and
-publishes them with `SHA256SUMS.txt`. Then sign the release on the machine that holds the signing
-key, which the app needs before it installs the update by itself:
-
-```sh
-pwsh -File scripts/sign-release.ps1 -Tag vX.Y.Z   # checks the published files, uploads release.sig
-```
-
-The key never goes to GitHub or CI. `-Init` creates it and prints the public half that
-`src/update.rs` carries.
-
-### Screenshots
-
-The images in `docs/screenshots` and on the website are rendered by the app itself, off screen,
-with the clock pinned to a fixed time, so they can be regenerated after a visual change:
-
-```sh
-cargo test shots -- --ignored        # renders to target/shots
-python scripts/compose-shots.py      # composes docs/screenshots (needs Pillow)
-```
-
-The `cargo test` line also writes `target/shots/site/`, and `python scripts/site-assets.py` turns those
-renders into `site/img/`, the website that `pages.yml` publishes.
+Packaging, the end-to-end test scripts, releasing and regenerating the screenshots and the website
+are in [docs/development.md](docs/development.md).
 
 ## How it works
 
 [docs/architecture.md](docs/architecture.md) explains how the app is built and why: how settings
-are stored, when it redraws, how the market hours are computed without a time zone database, and
-how installing and single-instance handling work.
+are stored, when it redraws, how the market hours are computed without a time zone database, how
+installing and single-instance handling work, and how updates are signed and checked.
 
 ## License
 
