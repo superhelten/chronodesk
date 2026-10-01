@@ -34,6 +34,9 @@ pub const RETRY_AFTER: Duration = Duration::from_secs(3600);
 /// Long enough for a slow connection, short enough that a stuck one does not
 /// keep a thread around for minutes.
 const TIMEOUT_MS: i32 = 10_000;
+/// The whole of a download, however slowly it trickles in: the timeout above
+/// is for each read, and a server sending a byte at a time never hits it.
+const TRANSFER_LIMIT: Duration = Duration::from_secs(300);
 /// The largest setup the app will download; the real one is under 6 MB.
 const MAX_SETUP_BYTES: usize = 32 << 20;
 const MAX_SMALL_BYTES: usize = 16 << 10;
@@ -124,7 +127,7 @@ pub fn download_setup(version: Version) -> Result<std::path::PathBuf, Refused> {
     let base = format!("{LATEST_PATH_DIR}/download/v{version}/");
     let get = |name: &str, limit| {
         let path = format!("{base}{name}");
-        imp::get(Target { secure: true, host: HOST, port: 443, path: &path }, limit).map_err(Refused::Download)
+        imp::get(Target { secure: true, host: HOST, port: 443, path: &path }, limit, TRANSFER_LIMIT).map_err(Refused::Download)
     };
     let sums = get("SHA256SUMS.txt", MAX_SMALL_BYTES)?;
     let signature = get("SHA256SUMS.txt.sig", MAX_SMALL_BYTES)?;
@@ -217,6 +220,7 @@ struct Target<'a> {
 mod imp {
     use std::io;
     use std::ptr::{null, null_mut};
+    use std::time::{Duration, Instant};
 
     use windows_sys::Win32::Networking::WinHttp::{
         WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_DISABLE_REDIRECTS, WINHTTP_FLAG_SECURE,
@@ -309,8 +313,9 @@ mod imp {
     }
 
     /// The body of a GET, following redirects; anything but a 200 is an error,
-    /// and so is a body larger than `limit`.
-    pub(super) fn get(target: Target<'_>, limit: usize) -> io::Result<Vec<u8>> {
+    /// and so is a body larger than `limit` or one that takes longer than `within`.
+    pub(super) fn get(target: Target<'_>, limit: usize, within: Duration) -> io::Result<Vec<u8>> {
+        let deadline = Instant::now() + within;
         let exchange = exchange(target, true)?;
         if exchange.status != 200 {
             return Err(io::Error::other(format!("HTTP {} for {}", exchange.status, target.path)));
@@ -318,6 +323,9 @@ mod imp {
         let mut body = Vec::new();
         let mut chunk = vec![0u8; 64 << 10];
         loop {
+            if Instant::now() > deadline {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, format!("{} took too long", target.path)));
+            }
             let mut read = 0u32;
             // SAFETY: `chunk` is valid for its length; the request is open.
             check(unsafe { WinHttpReadData(exchange.request.0, chunk.as_mut_ptr().cast(), chunk.len() as u32, &mut read) })?;
@@ -434,6 +442,7 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     use std::io;
+    use std::time::Duration;
 
     use super::Target;
 
@@ -441,7 +450,7 @@ mod imp {
         Err(io::ErrorKind::Unsupported.into())
     }
 
-    pub(super) fn get(_target: Target<'_>, _limit: usize) -> io::Result<Vec<u8>> {
+    pub(super) fn get(_target: Target<'_>, _limit: usize, _within: Duration) -> io::Result<Vec<u8>> {
         Err(io::ErrorKind::Unsupported.into())
     }
 
@@ -607,7 +616,7 @@ mod tests {
             }
         });
         let target = Target { secure: false, host: "127.0.0.1", port, path: "/o/r/releases/download/v9.9.9/setup" };
-        assert_eq!(imp::get(target, 1 << 20).unwrap(), body);
+        assert_eq!(imp::get(target, 1 << 20, TRANSFER_LIMIT).unwrap(), body);
         server.join().unwrap();
     }
 
@@ -626,7 +635,38 @@ mod tests {
             let _ = stream.write_all(&[7u8; 100_000]);
         });
         let target = Target { secure: false, host: "127.0.0.1", port, path: "/big" };
-        assert!(imp::get(target, 1000).is_err());
+        assert!(imp::get(target, 1000, TRANSFER_LIMIT).is_err());
+        server.join().unwrap();
+    }
+
+    /// A server that keeps sending, a byte now and then, never trips the
+    /// timeout of a single read; the download as a whole still gives up.
+    #[cfg(windows)]
+    #[test]
+    fn a_download_that_trickles_is_given_up() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = stream.read(&mut [0u8; 2048]).unwrap();
+            let _ = stream.write_all(b"HTTP/1.1 200 OK
+Content-Length: 100
+Connection: close
+
+");
+            for _ in 0..30 {
+                if stream.write_all(&[7u8]).and_then(|()| stream.flush()).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let target = Target { secure: false, host: "127.0.0.1", port, path: "/slow" };
+        let err = imp::get(target, 1000, Duration::from_millis(300)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         server.join().unwrap();
     }
 
