@@ -26,10 +26,13 @@ impl ChronoApp {
                 Some(latest) => {
                     self.settings.update_checked = epoch_s(SystemTime::now());
                     let offer = (latest > Version::current()).then(|| latest.to_string());
-                    if offer != self.settings.update_available {
+                    // An update under way keeps its version; a newer one is
+                    // offered by the check after it, if it did not go through.
+                    let busy = matches!(self.update_step, UpdateStep::Downloading | UpdateStep::Installing);
+                    if !busy && offer != self.settings.update_available {
                         self.update_step = UpdateStep::Offered;
+                        self.settings.update_available = offer;
                     }
-                    self.settings.update_available = offer;
                 }
                 None => self.update_retry = Some(now + update::RETRY_AFTER),
             }
@@ -209,6 +212,23 @@ mod tests {
             app.poll_update_download();
             assert_eq!(app.update_step, UpdateStep::Failed);
             assert!(app.update_download.is_none());
+        }
+    }
+
+    /// A check that answers while an update downloads or installs leaves it
+    /// be: the menu must not offer a second download of something else.
+    #[test]
+    fn a_check_does_not_interrupt_an_update_in_flight() {
+        let ctx = egui::Context::default();
+        let offer = Config { update_available: Some("999.0.0".to_owned()), ..Config::default() };
+        let mut app = ChronoApp::pinned(&ctx, offer, Local::now());
+        for step in [UpdateStep::Downloading, UpdateStep::Installing] {
+            let (tx, rx) = mpsc::channel();
+            tx.send(Version::parse("1000.0.0")).unwrap();
+            (app.update_step, app.update_check) = (step, Some(rx));
+            app.check_for_updates(&ctx, Instant::now());
+            assert_eq!(app.update_step, step);
+            assert_eq!(app.settings.update_available.as_deref(), Some("999.0.0"));
         }
     }
 
