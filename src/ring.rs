@@ -16,10 +16,10 @@ pub const DOTS: usize = 60;
 
 /// Centres of the `DOTS` LEDs on the rounded rectangle `track` (corner
 /// radius `radius`), the first at top centre and the rest clockwise.
-pub fn dots(track: Rect, radius: f32) -> Vec<Pos2> {
+pub fn dots(track: Rect, radius: f32) -> [Pos2; DOTS] {
     let radius = radius.min(track.width() / 2.0).min(track.height() / 2.0).max(0.0);
     let perimeter = 2.0 * (track.width() + track.height()) - 8.0 * radius + 2.0 * PI * radius;
-    (0..DOTS).map(|i| point_at(track, radius, perimeter * i as f32 / DOTS as f32)).collect()
+    std::array::from_fn(|i| point_at(track, radius, perimeter * i as f32 / DOTS as f32))
 }
 
 /// The point `t` along the track, measured clockwise from top centre.
