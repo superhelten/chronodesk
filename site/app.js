@@ -33,7 +33,7 @@ if (form && stage) {
     const alike = v.colour === 'studio' && !v.ring;
     if (hint) hint.parentNode.classList.toggle('alike', alike);
     $('skin-live').textContent = [FACE[v.face][0], COL[v.colour][0], v.ring && 'seconds ring', v.backdrop && 'backdrop']
-      .filter(Boolean).join(', ') + (alike ? `. ${hint.textContent}` : '');
+      .filter(Boolean).join(', ') + (alike && hint ? `. ${hint.textContent}` : '');
     if (!back) {
       back = d.createElement('img'); hide(back); back.decoding = 'async';
       stage.insertBefore(back, front.nextSibling);
