@@ -1,7 +1,9 @@
 # Signs a published release, so the app can install it by itself.
 #
-# The app installs an update only when SHA256SUMS.txt comes with a signature
-# made by the key whose public half is built into it (src/update.rs). The
+# The app installs an update only when release.sig holds a signature, made by
+# the key whose public half is built into it (src/update.rs), over the line
+# "ChronoDesk <version>" and then SHA256SUMS.txt. The version is part of it so
+# an older release's files cannot be published again as a newer one. The
 # private key never leaves this machine: it is not in the repository and not
 # in CI, so a compromised GitHub account can publish an exe but not a
 # signature the app accepts. Without a valid signature the app falls back to
@@ -79,10 +81,17 @@ try {
     $actual = (Get-FileHash (Join-Path $work $name) -Algorithm SHA256).Hash.ToLower()
     if ($actual -ne $hash) { throw "$name does not match SHA256SUMS.txt" }
   }
-  $signature = Join-Path $work 'SHA256SUMS.txt.sig'
-  [IO.File]::WriteAllText($signature, (Sign ([IO.File]::ReadAllBytes($sums))) + "`n")
-  gh release upload $Tag $signature -R superhelten/chronodesk --clobber
-  if ($LASTEXITCODE -ne 0) { throw "could not upload the signature" }
+  $version = $Tag.TrimStart('v')
+  $message = [Text.Encoding]::UTF8.GetBytes("ChronoDesk $version`n") + [IO.File]::ReadAllBytes($sums)
+  $signature = Join-Path $work 'release.sig'
+  [IO.File]::WriteAllText($signature, (Sign $message) + "`n")
+  # 0.5.0 and older check a signature over the checksums alone, under this
+  # name. Kept while people may still update from those; it vouches for
+  # nothing the new one does not.
+  $legacy = Join-Path $work 'SHA256SUMS.txt.sig'
+  [IO.File]::WriteAllText($legacy, (Sign ([IO.File]::ReadAllBytes($sums))) + "`n")
+  gh release upload $Tag $signature $legacy -R superhelten/chronodesk --clobber
+  if ($LASTEXITCODE -ne 0) { throw "could not upload the signatures" }
   "signed $Tag"
 }
 finally {

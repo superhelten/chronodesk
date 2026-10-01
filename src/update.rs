@@ -7,7 +7,8 @@
 //!
 //! Clicking it downloads the release's `SHA256SUMS.txt`, its signature and the
 //! setup, and runs the setup only if the signature was made by the release key
-//! built into this exe and the setup matches its listed checksum. The private
+//! built into this exe, over that version and those checksums, and the setup
+//! matches its listed checksum. The private
 //! key is kept by whoever makes releases, not on GitHub, so a compromised
 //! account can publish an exe but not one this accepts; anything that does
 //! not verify is thrown away and the release page is opened instead. Nothing
@@ -41,6 +42,8 @@ const TRANSFER_LIMIT: Duration = Duration::from_secs(300);
 const MAX_SETUP_BYTES: usize = 32 << 20;
 const MAX_SMALL_BYTES: usize = 16 << 10;
 const SETUP_NAME: &str = "ChronoDesk-Setup.exe";
+/// The release key's signature over [`signed_message`].
+const SIGNATURE_NAME: &str = "release.sig";
 /// What a downloaded setup is saved as, in the temp folder, before it runs.
 const DOWNLOAD_PREFIX: &str = "ChronoDesk-Setup-";
 
@@ -106,14 +109,26 @@ impl fmt::Display for Refused {
     }
 }
 
-/// The whole check a download has to pass: the checksums carry a signature by
-/// `key`, and the setup is what they list.
-fn verified(sums: &[u8], signature: &[u8], setup: &[u8], key: &[u8; 64]) -> Result<(), Refused> {
+/// What the release key signs: the version, then the checksums. Without the
+/// version, the files and signature of an older release could be published
+/// again under a newer number, and would verify.
+fn signed_message(version: Version, sums: &[u8]) -> Vec<u8> {
+    let mut message = format!("ChronoDesk {version}\n").into_bytes();
+    message.extend_from_slice(sums);
+    message
+}
+
+/// The checksums of `version`, if `signature` is the release key's over them.
+fn signed_sums<'a>(version: Version, sums: &'a [u8], signature: &[u8], key: &[u8; 64]) -> Result<&'a str, Refused> {
     let signature = std::str::from_utf8(signature).ok().and_then(parse_hex).ok_or(Refused::Signature)?;
-    if !imp::verify_p256(key, sums, &signature) {
+    if !imp::verify_p256(key, &signed_message(version, sums), &signature) {
         return Err(Refused::Signature);
     }
-    let sums = std::str::from_utf8(sums).map_err(|_| Refused::Checksum)?;
+    std::str::from_utf8(sums).map_err(|_| Refused::Checksum)
+}
+
+/// Whether `setup` is what the signed checksums list for it.
+fn matches(sums: &str, setup: &[u8]) -> Result<(), Refused> {
     let expected = checksum_for(sums, SETUP_NAME).ok_or(Refused::Checksum)?;
     if imp::sha256(setup).as_slice() != expected.as_slice() {
         return Err(Refused::Checksum);
@@ -130,14 +145,11 @@ pub fn download_setup(version: Version) -> Result<std::path::PathBuf, Refused> {
         imp::get(Target { secure: true, host: HOST, port: 443, path: &path }, limit, TRANSFER_LIMIT).map_err(Refused::Download)
     };
     let sums = get("SHA256SUMS.txt", MAX_SMALL_BYTES)?;
-    let signature = get("SHA256SUMS.txt.sig", MAX_SMALL_BYTES)?;
+    let signature = get(SIGNATURE_NAME, MAX_SMALL_BYTES)?;
     // Checked before the large download: an unsigned release costs 6 MB nobody needs.
-    let early = std::str::from_utf8(&signature).ok().and_then(parse_hex);
-    if !early.is_some_and(|sig| imp::verify_p256(&RELEASE_KEY, &sums, &sig)) {
-        return Err(Refused::Signature);
-    }
+    let sums = signed_sums(version, &sums, &signature, &RELEASE_KEY)?;
     let setup = get(SETUP_NAME, MAX_SETUP_BYTES)?;
-    verified(&sums, &signature, &setup, &RELEASE_KEY)?;
+    matches(sums, &setup)?;
     let path = std::env::temp_dir().join(format!("{DOWNLOAD_PREFIX}{version}.exe"));
     std::fs::write(&path, &setup).map_err(Refused::Download)?;
     Ok(path)
@@ -559,25 +571,35 @@ mod tests {
         assert_eq!(parse_hex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad").unwrap(), abc);
     }
 
-    /// A release as `sign-release.ps1` leaves it: checksums, their signature,
-    /// and a setup that matches; then each part tampered with in turn.
+    #[test]
+    fn the_signature_covers_the_version_and_then_the_checksums() {
+        assert_eq!(signed_message(Version(0, 6, 0), b"aa  x\n"), b"ChronoDesk 0.6.0\naa  x\n");
+    }
+
+    /// A release as `sign-release.ps1` leaves it: checksums, the signature
+    /// over them and the version, and a setup that matches; then each part
+    /// tampered with in turn. The signature was made with
+    /// `sign-release.ps1 -Message` over "ChronoDesk 9.9.9\n" and `sums`.
     #[cfg(windows)]
     #[test]
     fn a_setup_installs_only_with_signed_checksums_that_it_matches() {
         let setup = b"fake setup, for the test";
         let hash = "2edf152799420a3c60462a7d8ab14c2dc3f623dd220d5d5a7d95a026af9eccc7";
         let sums = format!("{hash}  ChronoDesk-Setup.exe\n{hash}  ChronoDesk.exe\n");
-        let signature = "5c64f7a1f3ada53e1cdfe91f6ba0b62abe0ecc1bd8ccea12e95e21b4ac1f696f16dcbaa5b43fd2445a3e5169ff7297a2a740cbd21d853de633c5cd1924813f1a\n";
+        let signature = "334f27bfe696042a6ef699b03daea9518a689311743c8092fd543af4e8d2d8ac9e92cebebe51719d15866dfde9b05c8c27c4d021bf272903197841907e510ffd\n";
+        let version = Version(9, 9, 9);
+        let check = |version, sums: &str, signature: &[u8], setup: &[u8]| {
+            matches(signed_sums(version, sums.as_bytes(), signature, &RELEASE_KEY)?, setup)
+        };
 
-        assert!(verified(sums.as_bytes(), signature.as_bytes(), setup, &RELEASE_KEY).is_ok());
-        assert!(matches!(
-            verified(sums.as_bytes(), signature.as_bytes(), b"fake setup, for the tesT", &RELEASE_KEY),
-            Err(Refused::Checksum)
-        ));
+        assert!(check(version, &sums, signature.as_bytes(), setup).is_ok());
+        assert!(matches!(check(version, &sums, signature.as_bytes(), b"fake setup, for the tesT"), Err(Refused::Checksum)));
         let swapped = sums.replace(hash, &"0".repeat(64));
-        assert!(matches!(verified(swapped.as_bytes(), signature.as_bytes(), setup, &RELEASE_KEY), Err(Refused::Signature)));
-        assert!(matches!(verified(sums.as_bytes(), b"", setup, &RELEASE_KEY), Err(Refused::Signature)));
-        assert!(matches!(verified(sums.as_bytes(), b"not hex", setup, &RELEASE_KEY), Err(Refused::Signature)));
+        assert!(matches!(check(version, &swapped, signature.as_bytes(), setup), Err(Refused::Signature)));
+        assert!(matches!(check(version, &sums, b"", setup), Err(Refused::Signature)));
+        assert!(matches!(check(version, &sums, b"not hex", setup), Err(Refused::Signature)));
+        // The same files and signature, published again as another release.
+        assert!(matches!(check(Version(10, 0, 0), &sums, signature.as_bytes(), setup), Err(Refused::Signature)));
     }
 
     #[test]

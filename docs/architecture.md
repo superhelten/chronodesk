@@ -205,10 +205,12 @@ path: it asks this overlay to quit, replaces the exe and starts the new one.
 
 The check is what makes that safe. The exe is not Authenticode-signed, so
 Windows would not stop a replaced file, and "fetch from GitHub and execute" is
-exactly what a compromised account would exploit. So each release's checksum
-list is signed with an ECDSA P-256 key that stays on the machine releases are
-made on (`scripts/sign-release.ps1`, DPAPI-sealed, never in CI), and the app
-carries the public half. CNG verifies the signature and computes the SHA-256,
+exactly what a compromised account would exploit. So each release's version
+and checksum list are signed together with an ECDSA P-256 key that stays on
+the machine releases are made on (`scripts/sign-release.ps1`, DPAPI-sealed,
+never in CI), and the app carries the public half. The version is in the
+signed text so an older release cannot be published again under a newer
+number and install as an upgrade. CNG verifies the signature and computes the SHA-256,
 so no crypto crate is needed. A release that is unsigned or does not verify
 is thrown away and the menu item opens the release page instead, which is
 also all a portable copy does. Downloaded setups are removed on the next

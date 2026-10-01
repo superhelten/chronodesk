@@ -187,7 +187,7 @@ publishes them with `SHA256SUMS.txt`. Then sign the release on the machine that 
 key, which the app needs before it installs the update by itself:
 
 ```sh
-pwsh -File scripts/sign-release.ps1 -Tag vX.Y.Z   # checks the published files, uploads SHA256SUMS.txt.sig
+pwsh -File scripts/sign-release.ps1 -Tag vX.Y.Z   # checks the published files, uploads release.sig
 ```
 
 The key never goes to GitHub or CI. `-Init` creates it and prints the public half that
