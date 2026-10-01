@@ -22,9 +22,10 @@ pub fn arm<Tz: TimeZone>(at: TimeOfDay, now: &DateTime<Tz>) -> i64 {
     let local = now.naive_local();
     let mut day = local.date();
     for _ in 0..2 {
+        // Compared as instants, not wall times: the night the clocks go back,
+        // a time already passed on the wall comes round once more.
         let target = day.and_time(at.time());
-        if target > local
-            && let Some(real) = resolve_ahead(&target, now)
+        if let Some(real) = resolve_ahead(&target, now)
             && real > *now
         {
             return real.timestamp();
@@ -91,6 +92,13 @@ mod tests {
         // is the second 02:30, ten minutes off, and not one long gone.
         let second = Cet.with_ymd_and_hms(2026, 10, 25, 2, 20, 0).latest().unwrap();
         assert_eq!(wait(arm(t("02:30"), &second), &second), Duration::from_secs(10 * 60));
+        // Armed at 02:40 the first time round, the clock shows 02:30 again
+        // fifty minutes later: that is the next time, not tomorrow's.
+        let first = Cet.with_ymd_and_hms(2026, 10, 25, 2, 40, 0).earliest().unwrap();
+        assert_eq!(wait(arm(t("02:30"), &first), &first), Duration::from_secs(50 * 60));
+        // Past both showings it is tomorrow's.
+        let after = Cet.with_ymd_and_hms(2026, 10, 25, 2, 40, 0).latest().unwrap();
+        assert_eq!(wait(arm(t("02:30"), &after), &after), Duration::from_secs(24 * 3600 - 10 * 60));
     }
 
     #[test]
