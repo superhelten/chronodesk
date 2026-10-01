@@ -1,7 +1,7 @@
 //! The daily look for a newer release, and installing it from the menu.
 
 use std::sync::mpsc;
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use eframe::egui;
 
@@ -9,12 +9,16 @@ use crate::update::{self, Version};
 
 use super::ChronoApp;
 
+/// How often a running setup is looked at, to notice one that gave up.
+const SETUP_POLL: Duration = Duration::from_secs(1);
+
 impl ChronoApp {
     /// Looks for a newer release once a day, deciding on frames that are drawn
     /// anyway: it never wakes the overlay for it. The request runs on a thread
     /// of its own, and its answer costs one frame.
     pub(super) fn check_for_updates(&mut self, ctx: &egui::Context, now: Instant) {
         self.poll_update_download();
+        self.poll_update_setup(ctx);
         if let Some(pending) = &self.update_check {
             let answer = match pending.try_recv() {
                 Ok(answer) => answer,
@@ -89,6 +93,18 @@ impl ChronoApp {
         }
     }
 
+    /// A setup that ended while this overlay still runs did not replace it
+    /// (it failed, or was stopped): the item comes back, as a failure.
+    fn poll_update_setup(&mut self, ctx: &egui::Context) {
+        let Some(setup) = &mut self.update_setup else { return };
+        if let Ok(None) = setup.try_wait() {
+            ctx.request_repaint_after(SETUP_POLL);
+            return;
+        }
+        self.update_setup = None;
+        self.update_step = UpdateStep::Failed;
+    }
+
     /// Hands a verified download to its setup, which asks this overlay to
     /// quit, replaces the exe and starts the new version in its place.
     fn poll_update_download(&mut self) {
@@ -100,7 +116,10 @@ impl ChronoApp {
         };
         self.update_download = None;
         self.update_step = match result.map(|setup| std::process::Command::new(&setup).arg("--quiet").spawn()) {
-            Ok(Ok(_)) => UpdateStep::Installing,
+            Ok(Ok(setup)) => {
+                self.update_setup = Some(setup);
+                UpdateStep::Installing
+            }
             Ok(Err(err)) => {
                 eprintln!("ChronoDesk: could not start the update: {err}");
                 UpdateStep::Failed
@@ -230,6 +249,25 @@ mod tests {
             assert_eq!(app.update_step, step);
             assert_eq!(app.settings.update_available.as_deref(), Some("999.0.0"));
         }
+    }
+
+    /// A setup that ends without having ended this overlay leaves the item
+    /// usable again, instead of saying "Installing" for good.
+    #[cfg(windows)]
+    #[test]
+    fn a_setup_that_ends_early_counts_as_a_failure() {
+        let ctx = egui::Context::default();
+        let offer = Config { update_available: Some("999.0.0".to_owned()), ..Config::default() };
+        let mut app = ChronoApp::pinned(&ctx, offer, Local::now());
+        let setup = std::process::Command::new("cmd").args(["/c", "exit 1"]).spawn().unwrap();
+        (app.update_step, app.update_setup) = (UpdateStep::Installing, Some(setup));
+        let give_up = Instant::now() + Duration::from_secs(10);
+        while app.update_step == UpdateStep::Installing && Instant::now() < give_up {
+            app.poll_update_setup(&ctx);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(app.update_step, UpdateStep::Failed);
+        assert!(app.update_setup.is_none());
     }
 
     /// Test instances, like a script's, never go out to the network.

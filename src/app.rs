@@ -119,6 +119,9 @@ pub struct ChronoApp {
     update_step: UpdateStep,
     /// A download under way: the verified setup, or why there is none.
     update_download: Option<Receiver<Result<PathBuf, update::Refused>>>,
+    /// The update's setup while it runs. It ends this overlay before it is
+    /// done; one that ends while the overlay is still here did not go through.
+    update_setup: Option<std::process::Child>,
     /// The global hotkeys while they are registered, and whether they are
     /// meant to be: they can be wanted and still missing, when Windows
     /// refused them.
@@ -245,6 +248,7 @@ impl ChronoApp {
             updates_allowed: false,
             update_step: UpdateStep::Offered,
             update_download: None,
+            update_setup: None,
             installed: false,
             hotkeys: None,
             hotkeys_wanted: false,
