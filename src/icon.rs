@@ -54,10 +54,15 @@ pub fn with_badge(mut icon: Rgba) -> Rgba {
             let inner = coverage(dist - r);
             let i = ((y * icon.size + x) * 4) as usize;
             let fill = [60.0, 200.0, 110.0];
+            // Laid over the face rather than in place of it: the badge sits on
+            // the ring, and a soft edge that replaced the pixels under it would
+            // cut a see-through seam into the ring around the dot.
+            let below = f32::from(icon.rgba[i + 3]) / 255.0;
+            let alpha = outer + below * (1.0 - outer);
             for (c, f) in icon.rgba[i..i + 3].iter_mut().zip(fill) {
-                *c = (f * inner).round() as u8;
+                *c = ((f * inner * outer + f32::from(*c) * below * (1.0 - outer)) / alpha).round() as u8;
             }
-            icon.rgba[i + 3] = (outer * 255.0).round() as u8;
+            icon.rgba[i + 3] = (alpha * 255.0).round() as u8;
         }
     }
     icon
@@ -144,6 +149,19 @@ mod tests {
             expected_offset += len;
         }
         assert_eq!(file.len(), expected_offset);
+    }
+
+    /// Where the badge's soft edge falls on the opaque face, the face shows
+    /// through instead of a hole; away from the face the edge stays soft.
+    #[test]
+    fn the_badge_is_laid_over_the_face_and_leaves_no_seam() {
+        let size = 64;
+        let face = Rgba { rgba: [200, 200, 200, 255].repeat((size * size) as usize), size };
+        let badged = with_badge(face);
+        assert!(badged.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "an opaque face stays opaque");
+        let empty = Rgba { rgba: vec![0; (size * size * 4) as usize], size };
+        let alone = with_badge(empty);
+        assert!(alone.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0 && p[3] < 255), "the edge is soft over nothing");
     }
 
     #[test]
