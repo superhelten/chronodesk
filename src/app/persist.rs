@@ -64,9 +64,7 @@ impl ChronoApp {
     pub(super) fn write_config(&mut self) {
         let now = Instant::now();
         self.write_config_once();
-        if self.save_failed {
-            self.save_retry = Some(now + SAVE_RETRY);
-        }
+        self.save_retry = self.save_failed.then(|| now + SAVE_RETRY);
     }
 
     /// One attempt, with no retry of its own.
@@ -313,6 +311,26 @@ mod tests {
         app.persist(&ctx, Instant::now() + SAVE_RETRY + WAKE_SLACK, None);
         assert!(!app.save_failed && app.save_retry.is_none());
         assert!(config::load(&path).config.backdrop, "the retry wrote it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A later write that gets through makes the pending retry pointless.
+    #[test]
+    fn a_save_that_succeeds_cancels_the_retry() {
+        let dir = std::env::temp_dir().join(format!("chronodesk_test_save_cancel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("app.ron");
+        std::fs::create_dir_all(&path).unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        app.config_path = Some(path.clone());
+        app.write_config();
+        assert!(app.save_retry.is_some());
+
+        std::fs::remove_dir(&path).unwrap();
+        app.write_config();
+        assert!(!app.save_failed && app.save_retry.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
