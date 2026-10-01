@@ -12,8 +12,9 @@
 //!
 //! Only a wholly unparseable file (or one written by a newer schema) is
 //! rejected, and it is copied to `app.ron.bak` before anything overwrites it.
-//! A file that exists but cannot be read at all is not replaced either: the
-//! session runs on defaults and leaves it alone ([`Loaded::unreadable`]).
+//! If that copy cannot be made, or the file exists but cannot be read at all,
+//! it is not replaced either: the session runs on defaults and leaves it alone
+//! ([`Loaded::unreadable`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -232,6 +233,15 @@ impl Loaded {
     pub fn fallback(warnings: Vec<String>, quarantined: Option<PathBuf>) -> Self {
         Self { config: Config::returning(), warnings, quarantined, migrated: false, unreadable: false }
     }
+
+    /// Defaults in place of a file that is there but not trusted. It is kept
+    /// aside first; when no copy could be made it is still the only one, so
+    /// it is left alone as an unreadable file would be.
+    fn rejected(path: &Path, mut warnings: Vec<String>) -> Self {
+        let quarantined = quarantine(path, &mut warnings);
+        let unreadable = quarantined.is_none();
+        Self { unreadable, ..Self::fallback(warnings, quarantined) }
+    }
 }
 
 /// A scanner or backup tool may hold the file for a moment at logon, which is
@@ -284,16 +294,14 @@ pub fn load(path: &Path) -> Loaded {
     };
     let Some(text) = decode(&bytes, &mut warnings) else {
         warnings.push("file is not UTF-8 or UTF-16 text; starting from defaults".to_owned());
-        let quarantined = quarantine(path, &mut warnings);
-        return Loaded::fallback(warnings, quarantined);
+        return Loaded::rejected(path, warnings);
     };
 
     let mut fields = match parse_fields(&text) {
         Some(fields) => fields,
         None => {
             warnings.push("file is not valid RON; starting from defaults".to_owned());
-            let quarantined = quarantine(path, &mut warnings);
-            return Loaded::fallback(warnings, quarantined);
+            return Loaded::rejected(path, warnings);
         }
     };
 
@@ -307,8 +315,7 @@ pub fn load(path: &Path) -> Loaded {
         Some(Ok(v)) => v,
         Some(Err(_)) => {
             warnings.push("'schema_version' is not a number; starting from defaults".to_owned());
-            let quarantined = quarantine(path, &mut warnings);
-            return Loaded::fallback(warnings, quarantined);
+            return Loaded::rejected(path, warnings);
         }
         // Files written by eframe's persistence have no version field; one of
         // ours without it has been edited by hand and is read as it stands.
@@ -317,8 +324,7 @@ pub fn load(path: &Path) -> Loaded {
     };
     if version > SCHEMA_VERSION {
         warnings.push(format!("file uses schema {version}, this build knows {SCHEMA_VERSION}; starting from defaults"));
-        let quarantined = quarantine(path, &mut warnings);
-        return Loaded::fallback(warnings, quarantined);
+        return Loaded::rejected(path, warnings);
     }
     if version < SCHEMA_VERSION && eframe {
         let config = migrate_from_eframe(&fields, &mut warnings);
@@ -1130,6 +1136,7 @@ mod tests {
         write(&path, "(schema_version:1, mode:\"clo");
 
         let loaded = load(&path);
+        assert!(!loaded.unreadable, "kept aside, so it may be written over");
         assert_eq!(loaded.config, Config::returning(), "defaults, minus the welcome");
         let backup = loaded.quarantined.expect("corrupt file should be kept");
         assert_eq!(backup, path.with_extension("ron.bak"));
