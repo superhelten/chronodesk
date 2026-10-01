@@ -212,6 +212,8 @@ pub struct DerivedLayout {
     /// face, AM/PM and the widest captions in the caption face. Cleared on
     /// rebuild, never evicted otherwise: there are a few dozen at most.
     labels: HashMap<(LabelFace, String), Arc<Galley>>,
+    /// How full egui's font atlas was at the last look; see [`Self::follow_atlas`].
+    atlas_fill: f32,
     rebuilds: u32,
 }
 
@@ -225,6 +227,7 @@ impl DerivedLayout {
             caption_key: None,
             caption_galley: None,
             labels: HashMap::new(),
+            atlas_fill: 0.0,
             rebuilds: 0,
         }
     }
@@ -264,6 +267,17 @@ impl DerivedLayout {
         self.labels.clear();
         self.rebuilds += 1;
         true
+    }
+
+    /// Galleys point into egui's font atlas, which egui throws away and
+    /// starts over once it is nearly full. `fill` is how full the atlas is,
+    /// looked at in the same place every frame: it only drops when that has
+    /// happened, and then the next [`Self::ensure`] lays everything out anew.
+    pub fn follow_atlas(&mut self, fill: f32) {
+        if fill < self.atlas_fill {
+            self.key = None;
+        }
+        self.atlas_fill = fill;
     }
 
     /// Width of a main readout line, from cached cell widths only.
@@ -416,6 +430,23 @@ mod tests {
         // Display scale change at the same size.
         assert!(layout.ensure(LayoutKey::new(Size::Large, 1.5, Font::Sans), &theme, |_| glyphs()));
         assert_eq!(layout.rebuilds(), 3);
+    }
+
+    /// An atlas that filled up as text was laid out is fine; one that got
+    /// emptier was started over, and the galleys pointing into it are gone.
+    #[test]
+    fn an_atlas_that_was_started_over_rebuilds_the_cache() {
+        let theme = Theme::default();
+        let mut layout = DerivedLayout::new(&theme);
+        layout.follow_atlas(0.01);
+        assert!(layout.ensure(key(Size::Medium), &theme, |_| glyphs()));
+        for fill in [0.2, 0.2, 0.79] {
+            layout.follow_atlas(fill);
+            assert!(!layout.ensure(key(Size::Medium), &theme, |_| panic!("re-measured")));
+        }
+        layout.follow_atlas(0.01);
+        assert!(layout.ensure(key(Size::Medium), &theme, |_| glyphs()));
+        assert_eq!(layout.rebuilds(), 2);
     }
 
     /// The face decides how every cell is measured, so it is part of the key:

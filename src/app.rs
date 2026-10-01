@@ -424,6 +424,7 @@ impl eframe::App for ChronoApp {
         // the font atlas; the digital face is pure geometry.
         let theme = self.theme;
         let key = LayoutKey::new(s.size, ctx.pixels_per_point(), s.font);
+        self.layout.follow_atlas(ctx.fonts(|fonts| fonts.font_atlas_fill_ratio()));
         self.layout.ensure(key, &theme, |font| match s.font {
             Font::Sans => measure_glyphs(&ctx, font),
             Font::Digital => digital::glyphs(font, &theme.segments),
