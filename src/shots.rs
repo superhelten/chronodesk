@@ -22,6 +22,7 @@ use egui_kittest::Harness;
 
 use crate::app::{ChronoApp, Mode, Size};
 use crate::board::Layout;
+use crate::clock::ClockFormat;
 use crate::config::Config;
 use crate::layout::Font;
 use crate::market::Labels;
@@ -132,26 +133,115 @@ fn shots_ring_frames() {
     }
 }
 
-/// Every face in every palette, for the website's skin picker. The seconds
-/// ring is on because the Green and Studio palettes differ only in it.
+/// Settings for a website scene: [`base()`] with the two things that could
+/// give away the zone of the machine that renders spelled out, although
+/// base() has them already: a second zone, and night dimming on a schedule.
+fn site(settings: Config) -> Config {
+    Config { second_zone: None, night: NightMode::Off, ..settings }
+}
+
+/// Every website image: the skin picker's faces, palettes, ring and backdrop,
+/// one scene per mode, and a row of other looks.
 #[test]
 #[ignore = "writes website images; run with --ignored"]
 fn site_shots() {
     let at = clock_time(37);
     for font in Font::ALL {
         for palette in Palette::ALL {
-            let settings = Config {
-                font,
-                palette,
-                seconds_ring: true,
-                show_date: true,
-                // Spelled out although base() has them: a second zone or night
-                // dimming would give away the zone of the machine that renders.
-                second_zone: None,
-                night: NightMode::Off,
-                ..base()
-            };
-            save(&format!("site/clock-{}-{}", font.id(), palette.id()), &settings, at);
+            for seconds_ring in [false, true] {
+                for backdrop in [false, true] {
+                    let settings = site(Config { font, palette, seconds_ring, backdrop, show_date: true, ..base() });
+                    let name = format!(
+                        "site/skin-{}-{}-r{}-b{}",
+                        font.id(),
+                        palette.id(),
+                        u8::from(seconds_ring),
+                        u8::from(backdrop),
+                    );
+                    save(&name, &settings, at);
+                }
+            }
         }
     }
+
+    // The modes, each in another face and colour. Counters stay paused: a
+    // running one is measured against the real clock, not the pinned one.
+    save(
+        "site/mode-clock",
+        &site(Config { font: Font::Sans, palette: Palette::Warm, backdrop: true, show_date: true, ..base() }),
+        at,
+    );
+    save(
+        "site/mode-stopwatch",
+        &site(Config {
+            mode: Mode::Stopwatch,
+            font: Font::Digital,
+            palette: Palette::Amber,
+            stopwatch: Some(Saved { accumulated_ms: 754_320, started_at_ms: None }),
+            ..base()
+        }),
+        at,
+    );
+    save(
+        "site/mode-timer",
+        &site(Config {
+            mode: Mode::Timer,
+            font: Font::Matrix,
+            palette: Palette::Red,
+            seconds_ring: true,
+            pomodoro: true,
+            pomodoro_phase: 0,
+            timer_minutes: 25,
+            // 17:12 left of the first 25-minute focus period.
+            countdown: Some(Saved { accumulated_ms: (25 * 60 - 17 * 60 - 12) * 1000, started_at_ms: None }),
+            ..base()
+        }),
+        at,
+    );
+    let board = site(Config { mode: Mode::Market, font: Font::Sans, palette: Palette::Cool, ..base() });
+    save("site/mode-board", &board, board_time());
+    save(
+        "site/mode-strip",
+        &site(Config {
+            font: Font::Digital,
+            palette: Palette::Green,
+            board_layout: Layout::Horizontal,
+            board_labels: Labels::Code,
+            ..board
+        }),
+        board_time(),
+    );
+
+    // More looks. Night dimming is switched on outright, not on a schedule,
+    // so the picture does not depend on the zone. The chroma key is drawn
+    // transparent here; site-assets.py paints the green behind it.
+    save(
+        "site/look-12h",
+        &site(Config {
+            font: Font::Matrix,
+            palette: Palette::Amber,
+            clock_format: ClockFormat::H12,
+            show_date: true,
+            ..base()
+        }),
+        at,
+    );
+    save(
+        "site/look-night",
+        &Config {
+            night: NightMode::On,
+            ..site(Config { font: Font::Sans, palette: Palette::Yellow, show_date: true, ..base() })
+        },
+        at,
+    );
+    save(
+        "site/look-chroma",
+        &site(Config { font: Font::Digital, palette: Palette::Default, chroma: true, show_date: true, ..base() }),
+        at,
+    );
+    save(
+        "site/look-small",
+        &site(Config { font: Font::Sans, palette: Palette::Red, size: Size::Small, show_date: true, ..base() }),
+        at,
+    );
 }
