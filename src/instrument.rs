@@ -269,7 +269,7 @@ mod imp {
     impl Instrument {
         /// Starts the listener when the app was run with `--instrument`.
         pub fn start(ctx: &egui::Context) -> Self {
-            if !std::env::args().any(|arg| arg == "--instrument") {
+            if !std::env::args_os().any(|arg| arg == "--instrument") {
                 return Self { shared: None };
             }
             let shared = Arc::new(Mutex::new(Shared {
@@ -516,7 +516,7 @@ mod imp {
 
     impl Instrument {
         pub fn start(_ctx: &egui::Context) -> Self {
-            if std::env::args().any(|arg| arg == "--instrument") {
+            if std::env::args_os().any(|arg| arg == "--instrument") {
                 eprintln!("ChronoDesk: built without the 'instrument' feature; flag ignored");
             }
             Self

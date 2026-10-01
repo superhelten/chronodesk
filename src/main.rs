@@ -43,7 +43,9 @@ fn main() -> eframe::Result {
     let config_path = config::config_path();
 
     // The same exe is its own installer; see `install`.
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `args` would panic on an argument that is not valid Unicode, before the
+    // installer even had a look; such an argument is simply not one of ours.
+    let args: Vec<String> = std::env::args_os().skip(1).map(|arg| arg.to_string_lossy().into_owned()).collect();
     if let Some(action) = install::requested(&args, std::env::current_exe().ok().as_deref()) {
         std::process::exit(install::run(action, &args, config_path.as_deref()));
     }
