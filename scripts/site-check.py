@@ -9,7 +9,8 @@
 
 Offline it checks the size budgets, that every local link, image and
 #anchor resolves with exact case, that every <img> has alt text and
-width/height at half its pixels (the skin size table in app.js too), that
+width/height at half its pixels (the skin size table in app.js too, for
+every face, colour, seconds ring and backdrop), that
 PNG/WebP files carry only pixel chunks, the contrast of the colour tokens
 in style.css, and greps the published files for paths, time zones and
 hardware names that should never go public.
@@ -44,7 +45,7 @@ KB = 1024
 TEXT_BUDGET = 60 * KB
 IMAGE_BUDGET = 100 * KB
 IMAGE_BUDGETS = {"hero-ring-anim.webp": 600 * KB, "og.png": 200 * KB}
-SITE_BUDGET = 2.5 * KB * KB
+SITE_BUDGET = 5 * KB * KB
 SETUP_SIZE = 5.8 * KB * KB
 
 PNG_CHUNKS = {b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND"}
@@ -180,25 +181,30 @@ def check_app_js():
     if not m or not c:
         fail("app.js: DIM or COL table not found")
         return
-    dim = {f: (int(w), int(h)) for f, w, h in re.findall(r"(\w+): \[(\d+), (\d+)\]", m.group(1))}
+    # DIM is {face: [[w, h] without the ring, [w, h] with it]}; the backdrop keeps the size.
+    pair = r"\[(\d+), (\d+)\]"
+    dim = {f: [(int(w0), int(h0)), (int(w1), int(h1))]
+           for f, w0, h0, w1, h1 in re.findall(rf"(\w+): \[{pair}, {pair}\]", m.group(1))}
     colours = re.findall(r"(\w+): \[", c.group(1))
-    want = {f"skin-{f}-{col}.webp" for f in dim for col in colours}
+    switches = [(r, b) for r in (0, 1) for b in (0, 1)]
+    want = {f"skin-{f}-{col}-r{r}-b{b}.webp" for f in dim for col in colours for r, b in switches}
     have = {p.name for p in (SITE / "img").glob("skin-*.webp")}
     for name in sorted(have - want):
         fail(f"site/img/{name} is not reachable from the app.js tables")
-    for f, size in dim.items():
+    for f, sizes in dim.items():
         for col in colours:
-            path = SITE / "img" / f"skin-{f}-{col}.webp"
-            if not path.is_file():
-                fail(f"app.js points at missing {rel(path)}")
-                continue
-            w, h = natural(path)
-            if (w // 2, h // 2) != size:
-                fail(f"app.js DIM.{f} = {size[0]}x{size[1]}, but {path.name} is {w}x{h}")
+            for r, b in switches:
+                path = SITE / "img" / f"skin-{f}-{col}-r{r}-b{b}.webp"
+                if not path.is_file():
+                    fail(f"app.js points at missing {rel(path)}")
+                    continue
+                w, h = natural(path)
+                if (w // 2, h // 2) != sizes[r]:
+                    fail(f"app.js DIM.{f}[{r}] = {sizes[r][0]}x{sizes[r][1]}, but {path.name} is {w}x{h}")
     for lit in re.findall(r"'(img/[^'$]+)'", js):
         if not exists_exact(lit):
             fail(f"app.js points at missing site/{lit}")
-    ok(f"G12 app.js size table: {len(dim)} faces x {len(colours)} colours", start)
+    ok(f"G12 app.js size table: {len(dim)} faces x {len(colours)} colours x ring x backdrop", start)
 
 
 # --- Files ----------------------------------------------------------------
