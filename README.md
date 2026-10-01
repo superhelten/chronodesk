@@ -7,16 +7,28 @@ stock exchanges are open right now.
 Website: <https://superhelten.github.io/chronodesk/>
 
 <p align="center">
-  <img src="docs/screenshots/board.png" width="420" alt="Market board: New York, London and Frankfurt trading, Hong Kong and Tokyo closed, in a green dot-matrix face">
-  <img src="docs/screenshots/ring.gif" width="420" alt="Clock with the studio seconds ring filling up LED by LED">
+  <img src="docs/screenshots/ring.gif" width="420" alt="Clock in green dot-matrix with the studio seconds ring filling up LED by LED in red">
+  <img src="docs/screenshots/board.png" width="420" alt="Market board in a cool blue typeface: New York, London and Frankfurt trading, Hong Kong and Tokyo closed">
 </p>
 <p align="center">
-  <img src="docs/screenshots/board-strip.png" width="860" alt="The board as a one-line strip with exchange codes">
+  <img src="docs/screenshots/strip.png" width="860" alt="The board as a one-line strip with exchange codes, in green seven-segment digits">
 </p>
 <p align="center">
-  <img src="docs/screenshots/timer.png" width="270" alt="Countdown timer in red seven-segment with the seconds ring">
-  <img src="docs/screenshots/clock-segment.png" width="270" alt="Clock in red seven-segment with the date">
-  <img src="docs/screenshots/stopwatch.png" width="270" alt="Stopwatch in a yellow dot-matrix face">
+  <img src="docs/screenshots/clock.png" width="270" alt="Clock in a warm typeface on its dark backdrop plate">
+  <img src="docs/screenshots/timer.png" width="270" alt="Pomodoro timer in red dot-matrix with the seconds ring: focus period 1 of 4, paused">
+  <img src="docs/screenshots/stopwatch.png" width="270" alt="Stopwatch in amber seven-segment digits, paused">
+</p>
+
+Three faces in eight colours, with or without the seconds ring and the backdrop:
+
+<p align="center">
+  <img src="docs/screenshots/faces.png" width="860" alt="The clock in the plain typeface, seven-segment and dot-matrix faces, each in four of the eight colour presets">
+</p>
+<p align="center">
+  <img src="docs/screenshots/look-12h.png" width="205" alt="12-hour clock with AM before the date, in amber dot-matrix">
+  <img src="docs/screenshots/look-night.png" width="205" alt="Night mode: the clock dimmed to 70 percent">
+  <img src="docs/screenshots/look-chroma.png" width="205" alt="Chroma key: white seven-segment digits on pure green for streaming software">
+  <img src="docs/screenshots/look-small.png" width="205" alt="The small size, in a red typeface">
 </p>
 
 - **Market board:** local time and trading status for nine exchanges from New York to Sydney,
@@ -24,8 +36,10 @@ Website: <https://superhelten.github.io/chronodesk/>
   account.
 - **Clock and timers:** a second time zone after the date, a one-shot alarm, and a Pomodoro cycle
   on the timer.
-- **Hardware looks:** dot-matrix or seven-segment LED faces with ghosted unlit segments, a studio
-  seconds ring with sixty LEDs, and industrial colour presets (green, red, yellow, studio green/red).
+- **Hardware looks:** three faces (dot-matrix and seven-segment LEDs with ghosted unlit segments,
+  or a plain typeface), eight colour presets (default, warm, cool, amber, and the LED green, red,
+  yellow and studio green/red), a studio seconds ring with sixty LEDs and an optional dark backdrop
+  plate. Try every combination on the [website](https://superhelten.github.io/chronodesk/#skins).
 - **Stays out of the way:** click-through lock with hotkeys that still reach it, night dimming, chroma-key background for streaming,
   a stopwatch or timer that survives a reboot, and a chime when the timer runs out.
 - **Light:** one ~5.8 MB exe with no assets, ~50 MB RAM, one frame per second when idle. No admin
@@ -197,8 +211,8 @@ The key never goes to GitHub or CI. `-Init` creates it and prints the public hal
 
 ### Screenshots
 
-The images in `docs/screenshots` are rendered by the app itself with the clock pinned to a fixed
-time, so they can be regenerated after a visual change:
+The images in `docs/screenshots` and on the website are rendered by the app itself, off screen,
+with the clock pinned to a fixed time, so they can be regenerated after a visual change:
 
 ```sh
 cargo test shots -- --ignored        # renders to target/shots
