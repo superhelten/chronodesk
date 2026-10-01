@@ -208,8 +208,11 @@ fn replace_exe(source: &Path, dir: &Path) -> io::Result<()> {
         .map(|n| if n == 1 { dir.join(OLD_NAME) } else { dir.join(format!("{OLD_NAME}{n}")) })
         .find(|path| !path.exists())
         .expect("a free name");
-    if target.exists() {
-        fs::rename(&target, &old)?;
+    if target.exists()
+        && let Err(err) = fs::rename(&target, &old)
+    {
+        let _ = fs::remove_file(&new);
+        return Err(err);
     }
     if let Err(err) = fs::rename(&new, &target) {
         let _ = fs::rename(&old, &target);
