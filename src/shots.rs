@@ -6,6 +6,8 @@
 //! python scripts/compose-shots.py      # docs/screenshots/, on a backdrop
 //! ```
 //!
+//! `cargo test shots -- --ignored` also writes `target/shots/site/` for the website.
+//!
 //! Each scene is drawn twice: once in a roomy harness to learn the size the
 //! overlay asks for, then at exactly that size, as the real window would be.
 //! The board is pinned to an instant in UTC and the clock faces to a local
@@ -23,6 +25,7 @@ use crate::board::Layout;
 use crate::config::Config;
 use crate::layout::Font;
 use crate::market::Labels;
+use crate::night::NightMode;
 use crate::theme::Palette;
 use crate::timer::Saved;
 
@@ -70,6 +73,7 @@ fn out_dir() -> PathBuf {
 
 fn save(name: &str, settings: &Config, at: DateTime<Local>) {
     let path = out_dir().join(format!("{name}.png"));
+    std::fs::create_dir_all(path.parent().expect("inside target/shots")).expect("shots dir");
     render(settings, at).save(&path).expect("png written");
     println!("{}", path.display());
 }
@@ -125,5 +129,29 @@ fn shots_ring_frames() {
     let settings = Config { font: Font::Matrix, palette: Palette::Studio, seconds_ring: true, ..base() };
     for second in 0..60 {
         save(&format!("ring-{second:02}"), &settings, clock_time(second));
+    }
+}
+
+/// Every face in every palette, for the website's skin picker. The seconds
+/// ring is on because the Green and Studio palettes differ only in it.
+#[test]
+#[ignore = "writes website images; run with --ignored"]
+fn site_shots() {
+    let at = clock_time(37);
+    for font in Font::ALL {
+        for palette in Palette::ALL {
+            let settings = Config {
+                font,
+                palette,
+                seconds_ring: true,
+                show_date: true,
+                // Spelled out although base() has them: a second zone or night
+                // dimming would give away the zone of the machine that renders.
+                second_zone: None,
+                night: NightMode::Off,
+                ..base()
+            };
+            save(&format!("site/clock-{}-{}", font.id(), palette.id()), &settings, at);
+        }
     }
 }
