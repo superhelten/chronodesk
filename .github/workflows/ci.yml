@@ -1,9 +1,12 @@
 name: CI
 
 on:
+  # The website has its own workflow (pages.yml) and touches no Rust code.
   push:
     branches: [master, main]
+    paths-ignore: ['site/**', '.github/workflows/pages.yml']
   pull_request:
+    paths-ignore: ['site/**', '.github/workflows/pages.yml']
 
 permissions:
   contents: read
