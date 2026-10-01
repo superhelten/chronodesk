@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChronoDesk — a hardware clock for the Windows desktop</title>
+<meta name="description" content="A small, transparent always-on-top clock for Windows, styled after studio and trading-floor hardware clocks: clock, stopwatch, timer and a world market board. Free and open source.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0c0e">
+<link rel="canonical" href="https://superhelten.github.io/chronodesk/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="ChronoDesk">
+<meta property="og:title" content="ChronoDesk — a hardware clock for the Windows desktop">
+<meta property="og:description" content="Transparent, always-on-top clock, stopwatch, timer and world market board in LED faces. One ~5.8 MB exe for Windows 10 and 11. MIT licensed.">
+<meta property="og:url" content="https://superhelten.github.io/chronodesk/">
+<meta property="og:image" content="https://superhelten.github.io/chronodesk/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="ChronoDesk market board in green dot-matrix: New York, London and Frankfurt trading, Hong Kong and Tokyo closed">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ChronoDesk — a hardware clock for the Windows desktop">
+<meta name="twitter:description" content="Transparent, always-on-top clock, stopwatch, timer and world market board in LED faces. One ~5.8 MB exe for Windows 10 and 11. MIT licensed.">
+<meta name="twitter:image" content="https://superhelten.github.io/chronodesk/og.png">
+<meta name="twitter:image:alt" content="ChronoDesk market board in green dot-matrix: New York, London and Frankfurt trading, Hong Kong and Tokyo closed">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"ChronoDesk",
+ "description":"A small, transparent always-on-top clock for the Windows desktop, styled after studio and trading-floor hardware clocks.",
+ "operatingSystem":"Windows 10, Windows 11","applicationCategory":"UtilitiesApplication",
+ "downloadUrl":"https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk-Setup.exe",
+ "url":"https://superhelten.github.io/chronodesk/","license":"https://github.com/superhelten/chronodesk/blob/master/LICENSE",
+ "offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="top">
+  <div class="wrap top__in">
+    <a class="brand" href="#top">
+      <svg class="brand__glyph" viewBox="0 0 32 32" width="18" height="18" aria-hidden="true" focusable="false"><g fill="#8cfa46"><circle cx="16" cy="5" r="2" fill="#ff463c"/><circle cx="21.5" cy="6.5" r="2"/><circle cx="25.5" cy="10.5" r="2"/><circle cx="27" cy="16" r="2"/><circle cx="25.5" cy="21.5" r="2"/><circle cx="21.5" cy="25.5" r="2"/><circle cx="16" cy="27" r="2"/><circle cx="10.5" cy="25.5" r="2"/><circle cx="6.5" cy="21.5" r="2"/><circle cx="5" cy="16" r="2"/><circle cx="6.5" cy="10.5" r="2"/><circle cx="10.5" cy="6.5" r="2"/></g></svg>
+      <span>ChronoDesk</span>
+    </a>
+    <nav class="top__nav" aria-label="Sections">
+      <a href="#modes">Modes</a>
+      <a href="#skins">Skins</a>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+    </nav>
+    <a class="star star--top" href="https://github.com/superhelten/chronodesk" aria-label="Star ChronoDesk on GitHub">
+      <svg class="icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>Star</span>
+    </a>
+    <a class="btn btn--sm" href="https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk-Setup.exe">Download</a>
+  </div>
+</header>
+
+<main id="main">
+
+<section id="top" class="hero" aria-labelledby="hero-title">
+  <div class="wrap hero__in">
+    <div class="hero__text">
+      <p class="caption caption--led">FOR WINDOWS 10 AND 11 · FREE AND OPEN SOURCE</p>
+      <h1 id="hero-title">A hardware clock that floats on your Windows desktop.</h1>
+      <p class="lead">Clock, stopwatch, countdown timer and a world market board, drawn as dot-matrix or seven-segment LEDs or in plain type. Transparent, always on top, out of your way.</p>
+      <div class="cta">
+        <a class="btn btn--lg" href="https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk-Setup.exe">
+          <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 3v10m-4.5-4.5L10 13l4.5-4.5M4 17h12"/></svg>
+          <span>Download for Windows</span>
+        </a>
+        <p class="cta__meta mono"><span>ChronoDesk-Setup.exe</span> · <span>~5.8 MB</span> · <span>no admin rights</span></p>
+      </div>
+      <p class="hero__alt"><a href="https://github.com/superhelten/chronodesk/releases/latest">Portable exe, checksums and release notes</a></p>
+      <p class="hint"><span class="hint__dot" aria-hidden="true"></span><span>Not code-signed: Windows SmartScreen may ask once. <a href="#install-smartscreen">How to run it</a></span></p>
+    </div>
+    <div class="desk desk--hero">
+      <img id="hero-img" class="desk__img" src="img/hero-ring.webp" width="420" height="145" fetchpriority="high" decoding="async" alt="ChronoDesk clock in the Studio colours: green dot-matrix 10:09:37 and TUE 22 SEP, framed by the seconds ring of sixty LEDs that light up red second by second">
+      <template id="pause-tpl"><button class="pause" type="button" aria-pressed="false"><span class="pause__face" aria-hidden="true"><svg class="i-pause" viewBox="0 0 14 14" width="14" height="14" focusable="false"><path fill="currentColor" d="M3 2h3v10H3zm5 0h3v10H8z"/></svg><svg class="i-play" viewBox="0 0 14 14" width="14" height="14" focusable="false"><path fill="currentColor" d="M3.5 1.8v10.4L12 7z"/></svg></span><span class="vh">Pause animation</span></button></template>
+    </div>
+  </div>
+</section>
+
+<section id="modes" class="section" aria-labelledby="modes-title">
+  <div class="wrap">
+    <header class="section__head">
+      <h2 id="modes-title">Four modes, one small window</h2>
+      <p class="section__lead">Switch from the right-click menu, or with <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>–<kbd>4</kbd> from any window.</p>
+    </header>
+    <ul class="modes" role="list">
+      <li class="mode">
+        <div class="desk desk--tile"><img class="desk__img" src="img/skin-digital-red.webp" width="375" height="145" loading="lazy" decoding="async" alt="Clock in red seven-segment digits with ghosted unlit segments: 10:09:37 and TUE 22 SEP, framed by the LED seconds ring"></div>
+        <h3>Clock</h3>
+        <p>Time and date, 24 or 12 hours, seconds on or off. Add a second time zone after the date.</p>
+      </li>
+      <li class="mode">
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-stopwatch.webp" width="340" height="117" loading="lazy" decoding="async" alt="Stopwatch in yellow dot-matrix, paused at 12:34.3"></div>
+        <h3>Stopwatch</h3>
+        <p>Start, pause and reset with a hotkey. A running stopwatch carries on after a restart or a reboot.</p>
+      </li>
+      <li class="mode">
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-timer.webp" width="269" height="145" loading="lazy" decoding="async" alt="Countdown timer in red seven-segment digits, framed by the LED seconds ring, paused at 04:59"></div>
+        <h3>Timer</h3>
+        <p>Count down from 1 to 1440 minutes; scroll over a stopped timer to change it. Turn on Pomodoro for four focus periods with short and long breaks.</p>
+      </li>
+      <li class="mode">
+        <div class="desk desk--tile"><img class="desk__img" src="img/mode-board.webp" width="388" height="295" loading="lazy" decoding="async" alt="Market board in green dot-matrix: New York, London and Frankfurt trading, Hong Kong and Tokyo closed"></div>
+        <h3>Markets</h3>
+        <p>Which stock exchanges are trading, on lunch break or closed, with a countdown such as “London closes in 1h 45m”. Worked out on your PC: no network, no account.</p>
+      </li>
+    </ul>
+    <div class="strip">
+      <p class="strip__text">Or as a single line, with city names or exchange codes.</p>
+      <div class="desk desk--strip" tabindex="0" role="region" aria-label="Market strip, scrolls sideways"><img class="desk__img" src="img/mode-strip.webp" width="1032" height="129" loading="lazy" decoding="async" alt="The market board as a one-line strip with exchange codes"></div>
+    </div>
+    <p class="footnote">Nine exchanges from New York to Sydney, with daylight saving time handled per region. Public holidays and half days are not included.</p>
+  </div>
+</section>
+
+<section id="skins" class="section" aria-labelledby="skins-title">
+  <div class="wrap">
+    <header class="section__head">
+      <h2 id="skins-title">Pick a face and a colour</h2>
+      <p class="section__lead">3 faces × 8 colours, in any combination. Every picture here is rendered by ChronoDesk itself, off screen, at a pinned time.</p>
+    </header>
+    <div class="picker">
+      <figure class="picker__view">
+        <div class="desk stage" id="stage">
+          <img class="front" src="img/skin-matrix-green.webp" width="420" height="145" loading="lazy" decoding="async" alt="ChronoDesk clock, dot-matrix digits, Green: 10:09:37 and TUE 22 SEP, framed by the sixty-LED seconds ring">
+          <noscript><p class="stage__nojs">Turn on JavaScript to switch faces and colours.</p></noscript>
+        </div>
+        <figcaption class="picker__cap">Size, 12/24 hours, date, seconds ring, backdrop and night dimming are in the right-click menu.</figcaption>
+      </figure>
+      <form class="picker__ctl" id="picker">
+        <fieldset class="opts opts--face">
+          <legend class="caption">Face</legend>
+          <div class="opts__grid">
+            <input class="vh" type="radio" name="face" id="face-sans" value="sans"><label for="face-sans">Typeface</label>
+            <input class="vh" type="radio" name="face" id="face-digital" value="digital"><label for="face-digital">Seven-segment</label>
+            <input class="vh" type="radio" name="face" id="face-matrix" value="matrix" checked><label for="face-matrix">Dot matrix</label>
+          </div>
+        </fieldset>
+        <fieldset class="opts opts--colour">
+          <legend class="caption">Colour</legend>
+          <div class="opts__grid">
+            <input class="vh" type="radio" name="colour" id="colour-default" value="default"><label for="colour-default"><span class="sw sw--default" aria-hidden="true"></span>Default</label>
+            <input class="vh" type="radio" name="colour" id="colour-warm" value="warm"><label for="colour-warm"><span class="sw sw--warm" aria-hidden="true"></span>Warm</label>
+            <input class="vh" type="radio" name="colour" id="colour-cool" value="cool"><label for="colour-cool"><span class="sw sw--cool" aria-hidden="true"></span>Cool</label>
+            <input class="vh" type="radio" name="colour" id="colour-amber" value="amber"><label for="colour-amber"><span class="sw sw--amber" aria-hidden="true"></span>Amber</label>
+            <input class="vh" type="radio" name="colour" id="colour-green" value="green" checked><label for="colour-green"><span class="sw sw--green" aria-hidden="true"></span>Green</label>
+            <input class="vh" type="radio" name="colour" id="colour-red" value="red"><label for="colour-red"><span class="sw sw--red" aria-hidden="true"></span>Red</label>
+            <input class="vh" type="radio" name="colour" id="colour-yellow" value="yellow"><label for="colour-yellow"><span class="sw sw--yellow" aria-hidden="true"></span>Yellow</label>
+            <input class="vh" type="radio" name="colour" id="colour-studio" value="studio"><label for="colour-studio"><span class="sw sw--studio" aria-hidden="true"></span>Studio</label>
+          </div>
+        </fieldset>
+        <p class="vh" id="skin-live" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+</section>
+
+<section id="features" class="section" aria-labelledby="features-title">
+  <div class="wrap">
+    <header class="section__head">
+      <h2 id="features-title">Made to sit on your desktop all day</h2>
+    </header>
+    <ul class="features" role="list">
+      <li class="feat">
+        <h3 class="caption">OUT OF THE WAY</h3>
+        <p>Lock it from the tray icon and clicks pass straight through to the windows below. A dark halo keeps white digits readable on a white page, and night mode dims it on a schedule, never below 60 %.</p>
+      </li>
+      <li class="feat feat--keys">
+        <h3 class="caption">HOTKEYS FROM ANY WINDOW</h3>
+        <table class="keys">
+          <caption>Global hotkeys, also while locked</caption>
+          <thead><tr><th scope="col">Keys</th><th scope="col">Action</th></tr></thead>
+          <tbody>
+            <tr><td class="keys__k"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd></td><td>Start or pause the stopwatch or timer</td></tr>
+            <tr><td class="keys__k"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd></td><td>Reset</td></tr>
+            <tr><td class="keys__k"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></td><td>Clock, stopwatch, timer, markets</td></tr>
+            <tr><td class="keys__k"><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></td><td>Lock or unlock (click-through)</td></tr>
+          </tbody>
+        </table>
+        <p class="feat__after">A key combination another program already uses is skipped, not fought over. Switch them off under <em>Global hotkeys</em>.</p>
+      </li>
+      <li class="feat">
+        <h3 class="caption">READY FOR STREAMING</h3>
+        <p>Chroma-key mode puts it on pure <code>#00FF00</code> for OBS and other streaming software. Green colours are drawn in white there, so the keyer keeps them.</p>
+      </li>
+      <li class="feat">
+        <h3 class="caption">SURVIVES A REBOOT</h3>
+        <p>A running stopwatch or timer picks up where it was after a restart. A one-shot alarm sounds three times and blinks the frame, and won't ring late after the PC has been asleep.</p>
+      </li>
+      <li class="feat">
+        <h3 class="caption">LIGHT</h3>
+        <p>One ~5.8 MB exe with no image or font files. About 50 MB of RAM. One frame per second when idle; a paused stopwatch draws none. Written in Rust, drawn with egui on OpenGL.</p>
+      </li>
+      <li class="feat">
+        <h3 class="caption">PRIVATE</h3>
+        <p>No telemetry, no account. Once a day it asks GitHub whether there is a new release, sending nothing but its name and version; switch that off with <em>Check for updates</em>. Updates are signature-checked before they install, and nothing downloads until you click.</p>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<section id="install" class="section" aria-labelledby="install-title">
+  <div class="wrap">
+    <header class="section__head">
+      <h2 id="install-title">Install</h2>
+      <p class="section__lead">Windows 10 or 11. No admin rights needed.</p>
+    </header>
+    <div class="rows">
+      <div class="row">
+        <div class="row__text">
+          <h3>Setup <code class="file">ChronoDesk-Setup.exe</code></h3>
+          <p>Installs for your user only, in <code>%LOCALAPPDATA%\ChronoDesk</code>. Adds a Start menu shortcut and an <em>Installed apps</em> entry, then starts the clock. New versions arrive as a one-click item in the menu.</p>
+        </div>
+        <a class="btn" href="https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk-Setup.exe">Download Setup</a>
+      </div>
+      <div class="row">
+        <div class="row__text">
+          <h3>Portable <code class="file">ChronoDesk.exe</code></h3>
+          <p>The same program; run it from anywhere and nothing is installed. It still keeps its settings in <code>%APPDATA%\chronodesk</code>, and its update item opens the release page.</p>
+        </div>
+        <a class="btn btn--line" href="https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk.exe">Download portable exe</a>
+      </div>
+    </div>
+
+    <div class="note" id="install-smartscreen">
+      <p class="note__label">SMARTSCREEN</p>
+      <p>The exe isn't code-signed, so Windows SmartScreen may warn the first time. Choose <em>More info</em> → <em>Run anyway</em>. Checksums are in <a href="https://github.com/superhelten/chronodesk/releases/latest/download/SHA256SUMS.txt">SHA256SUMS.txt</a>, and in-app updates are signed and verified before they install.</p>
+    </div>
+
+    <div class="details">
+      <div class="verify">
+        <p class="caption">Check the download in PowerShell</p>
+        <div class="code">
+          <code id="cmd">Get-FileHash .\ChronoDesk-Setup.exe -Algorithm SHA256</code>
+          <button class="copy" type="button" id="copy" aria-label="Copy command">Copy</button>
+        </div>
+        <p class="copy-status" id="copy-status" aria-live="polite"></p>
+        <p class="verify__after">Compare the result with the line for the same file in SHA256SUMS.txt.</p>
+      </div>
+      <div class="extra">
+        <div>
+          <p class="caption">Uninstall</p>
+          <p>Settings → Apps → Installed apps, or run <code>chronodesk.exe --uninstall</code>. Your settings in <code>%APPDATA%\chronodesk</code> stay in place.</p>
+        </div>
+        <div>
+          <p class="caption">Build from source</p>
+          <p>Rust 1.95 or newer: <code>cargo run --release</code> — <a href="https://github.com/superhelten/chronodesk#building">Building notes in the README</a></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="final">
+      <a class="btn btn--lg" href="https://github.com/superhelten/chronodesk/releases/latest/download/ChronoDesk-Setup.exe">
+        <svg class="icon" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M10 3v10m-4.5-4.5L10 13l4.5-4.5M4 17h12"/></svg>
+        <span>Download for Windows</span>
+      </a>
+      <a class="star star--bottom" href="https://github.com/superhelten/chronodesk">
+        <svg class="icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.751.751 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/></svg>
+        <span>Star on GitHub</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <nav class="foot__nav" aria-label="Project">
+      <a href="https://github.com/superhelten/chronodesk">Source</a>
+      <a href="https://github.com/superhelten/chronodesk/releases">Releases</a>
+      <a href="https://github.com/superhelten/chronodesk/issues">Issues</a>
+      <a href="https://github.com/superhelten/chronodesk#readme">README</a>
+      <a href="https://github.com/superhelten/chronodesk/blob/master/docs/architecture.md">How it works</a>
+      <a href="https://github.com/superhelten/chronodesk/blob/master/LICENSE">MIT license</a>
+    </nav>
+    <p class="foot__legal">© 2026 ChronoDesk by superhelten. MIT licensed. Built with Rust.</p>
+    <p class="foot__small">Market hours are regular sessions only; public holidays and half days are not included.</p>
+  </div>
+</footer>
+</body>
+</html>
