@@ -53,10 +53,10 @@
 }
 
 @media (min-width: 768px) {
-  :root { --gutter: 24px; --section: 96px; }
+  :root { --gutter: 24px; --section: 80px; }
 }
 @media (min-width: 1280px) {
-  :root { --gutter: 32px; --section: 128px; }
+  :root { --gutter: 32px; --section: 96px; }
 }
 
 /* Base */
@@ -257,6 +257,9 @@ kbd {
   max-width: 90%;
   height: auto;
 }
+/* Only the hero sits top-right like a clock on a desktop; the showcase
+   panels centre their render so the panel reads as a frame, not a gap. */
+.desk--tile img, .desk--strip img, .stage img { inset: 0; margin: auto; }
 @media (max-width: 767.98px) {
   .desk img { inset: 0; margin: auto; }
 }
@@ -387,6 +390,11 @@ kbd {
 
 .modes { display: grid; gap: var(--sp-7) var(--sp-5); }
 .desk--tile { aspect-ratio: 4 / 3; }
+/* At 1280 every tile is 588 px wide, so 16/10 (367 px) still holds the
+   tallest render (the 295 px market board) with room above and below. */
+@media (min-width: 1280px) {
+  .desk--tile { aspect-ratio: 16 / 10; }
+}
 .mode h3 { margin-top: var(--sp-5); font-size: var(--fs-l); }
 .mode p { margin-top: var(--sp-2); color: var(--text-2); max-width: 36em; }
 
