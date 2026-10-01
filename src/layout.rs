@@ -209,9 +209,10 @@ pub struct DerivedLayout {
     caption_key: Option<(String, f32)>,
     caption_galley: Option<Arc<Galley>>,
     /// Labels that are fixed for a market set — city names in the label
-    /// face, AM/PM and the widest captions in the caption face. Cleared on
+    /// face, AM/PM and the widest captions in the caption face — one map per
+    /// [`LabelFace`], so a lookup takes the `&str` as it is. Cleared on
     /// rebuild, never evicted otherwise: there are a few dozen at most.
-    labels: HashMap<(LabelFace, String), Arc<Galley>>,
+    labels: [HashMap<String, Arc<Galley>>; 2],
     /// How full egui's font atlas was at the last look; see [`Self::follow_atlas`].
     atlas_fill: f32,
     rebuilds: u32,
@@ -226,7 +227,7 @@ impl DerivedLayout {
             row_glyphs: Glyphs::default(),
             caption_key: None,
             caption_galley: None,
-            labels: HashMap::new(),
+            labels: Default::default(),
             atlas_fill: 0.0,
             rebuilds: 0,
         }
@@ -264,7 +265,7 @@ impl DerivedLayout {
         // Galleys from the previous font size must not survive.
         self.caption_key = None;
         self.caption_galley = None;
-        self.labels.clear();
+        self.labels.iter_mut().for_each(HashMap::clear);
         self.rebuilds += 1;
         true
     }
@@ -302,17 +303,18 @@ impl DerivedLayout {
     /// A fixed label in `face`, laid out on first use and kept until the
     /// next rebuild.
     pub fn label_galley(&mut self, face: LabelFace, text: &str, layout: impl FnOnce(&str) -> Arc<Galley>) -> Arc<Galley> {
-        if let Some(galley) = self.labels.get(&(face, text.to_owned())) {
+        let labels = &mut self.labels[face as usize];
+        if let Some(galley) = labels.get(text) {
             return galley.clone();
         }
         let galley = layout(text);
-        self.labels.insert((face, text.to_owned()), galley.clone());
+        labels.insert(text.to_owned(), galley.clone());
         galley
     }
 
     #[cfg(test)]
     fn label_count(&self) -> usize {
-        self.labels.len()
+        self.labels.iter().map(HashMap::len).sum()
     }
 }
 

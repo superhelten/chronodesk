@@ -104,7 +104,7 @@ pub fn measure(layout: &mut DerivedLayout, rows: &[Row], arrangement: Layout, la
 
     // The widest digit of the caption face, for the worst-case countdown.
     let digit = ('0'..='9').fold(('0', 0.0), |best, d| {
-        let w = label(&d.to_string());
+        let w = label(d.encode_utf8(&mut [0; 4]));
         if w > best.1 { (d, w) } else { best }
     });
     let markets: Vec<_> = rows.iter().map(|r| r.market).collect();
