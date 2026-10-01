@@ -59,7 +59,9 @@ impl TimeOfDay {
     /// Accepts `HH:MM` and `H:MM`.
     pub fn parse(text: &str) -> Option<Self> {
         let (hour, minute) = text.split_once(':')?;
-        if !(1..=2).contains(&hour.len()) || minute.len() != 2 {
+        let digits = |part: &str| part.bytes().all(|b| b.is_ascii_digit());
+        // Digits only: `parse` would also take a sign, as in "+1:05".
+        if !(1..=2).contains(&hour.len()) || minute.len() != 2 || !digits(hour) || !digits(minute) {
             return None;
         }
         Self::new(hour.parse().ok()?, minute.parse().ok()?)
@@ -282,7 +284,7 @@ pub(crate) mod tests {
 
     #[test]
     fn rejects_out_of_range_and_malformed_times() {
-        for bad in ["24:00", "12:60", "22", "ab:cd", "", "22:00:00", "-1:00"] {
+        for bad in ["24:00", "12:60", "22", "ab:cd", "", "22:00:00", "-1:00", "+1:05", "12:+5"] {
             assert_eq!(TimeOfDay::parse(bad), None, "{bad:?} must be rejected");
         }
         assert_eq!(TimeOfDay::new(24, 0), None);
