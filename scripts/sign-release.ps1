@@ -82,7 +82,8 @@ try {
     if ($actual -ne $hash) { throw "$name does not match SHA256SUMS.txt" }
   }
   $version = $Tag.TrimStart('v')
-  $message = [Text.Encoding]::UTF8.GetBytes("ChronoDesk $version`n") + [IO.File]::ReadAllBytes($sums)
+  # Typed: adding two byte arrays gives an object array, which Sign cannot take.
+  [byte[]]$message = [Text.Encoding]::UTF8.GetBytes("ChronoDesk $version`n") + [IO.File]::ReadAllBytes($sums)
   $signature = Join-Path $work 'release.sig'
   [IO.File]::WriteAllText($signature, (Sign $message) + "`n")
   # 0.5.0 and older check a signature over the checksums alone, under this
