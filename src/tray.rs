@@ -73,6 +73,8 @@ pub enum Command {
     /// where it cannot be installed from here.
     Update,
     ToggleUpdateCheck,
+    /// Asks GitHub for the latest release straight away.
+    CheckNow,
     Quit,
 }
 
@@ -101,6 +103,7 @@ pub fn parse_command(id: &str) -> Option<Command> {
         "welcome" => Command::ShowWelcome,
         "update" => Command::Update,
         "checkupdates" => Command::ToggleUpdateCheck,
+        "checknow" => Command::CheckNow,
         "quit" => Command::Quit,
         _ => {
             let (kind, value) = id.split_once(':')?;
@@ -157,6 +160,9 @@ pub struct MenuState {
     pub autostart: bool,
     pub autostart_available: bool,
     pub check_updates: bool,
+    /// The item naming this version, which also checks for a newer one, and
+    /// whether it can be clicked.
+    pub version: (String, bool),
     /// The item at the top of the menu while an update is on offer, and
     /// whether it can be clicked (not while one is downloading).
     pub update: Option<(String, bool)>,
@@ -195,6 +201,7 @@ pub struct Tray {
     hotkeys: CheckMenuItem,
     autostart: CheckMenuItem,
     check_updates: CheckMenuItem,
+    check_now: MenuItem,
     /// Only in the menu while there is an update to offer.
     update: (MenuItem, PredefinedMenuItem),
     update_shown: bool,
@@ -287,6 +294,7 @@ impl Tray {
         let hotkeys = check("hotkeys", &format!("Global hotkeys ({})", hotkeys::MODIFIERS));
         let autostart = check("autostart", "Start with Windows");
         let check_updates = check("checkupdates", "Check for updates");
+        let check_now = MenuItem::with_id("checknow", concat!("ChronoDesk ", env!("CARGO_PKG_VERSION")), false, None);
         let update = (MenuItem::with_id("update", "Update available", true, None), PredefinedMenuItem::separator());
         let tips = MenuItem::with_id("welcome", "Quick tips", true, None);
         let quit = MenuItem::with_id("quit", "Quit ChronoDesk", true, None);
@@ -357,6 +365,7 @@ impl Tray {
             &hotkeys,
             &autostart,
             &check_updates,
+            &check_now,
             &s4,
             &tips,
             &quit,
@@ -409,6 +418,7 @@ impl Tray {
             hotkeys,
             autostart,
             check_updates,
+            check_now,
             update,
             update_shown: false,
             last_state: None,
@@ -496,6 +506,8 @@ impl Tray {
         self.autostart.set_checked(state.autostart);
         self.autostart.set_enabled(state.autostart_available);
         self.check_updates.set_checked(state.check_updates);
+        self.check_now.set_text(&state.version.0);
+        self.check_now.set_enabled(state.version.1);
 
         // The offer heads the menu, above everything else, and is gone when
         // there is nothing to offer.
@@ -520,9 +532,9 @@ impl Tray {
         let icon_state = (state.locked, state.update.as_ref().map(|(label, _)| label.clone()), armed);
         if self.icon_state.as_ref() != Some(&icon_state) && let Some(tray) = &self.icon {
             let mut tooltip = if state.locked {
-                "ChronoDesk — locked (click icon to unlock)".to_owned()
+                concat!("ChronoDesk ", env!("CARGO_PKG_VERSION"), " — locked (click icon to unlock)").to_owned()
             } else {
-                "ChronoDesk — click icon to lock".to_owned()
+                concat!("ChronoDesk ", env!("CARGO_PKG_VERSION"), " — click icon to lock").to_owned()
             };
             if let Some(armed) = &icon_state.2 {
                 tooltip.push_str(&format!("\n{armed}"));
@@ -582,6 +594,7 @@ mod tests {
     fn parses_all_menu_ids() {
         assert_eq!(parse_command("lock"), Some(Command::ToggleLock));
         assert_eq!(parse_command("quit"), Some(Command::Quit));
+        assert_eq!(parse_command("checknow"), Some(Command::CheckNow));
         assert_eq!(parse_command("autostart"), Some(Command::ToggleAutostart));
         assert_eq!(parse_command("hotkeys"), Some(Command::ToggleHotkeys));
         assert_eq!(parse_command("welcome"), Some(Command::ShowWelcome));

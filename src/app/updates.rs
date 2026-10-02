@@ -26,10 +26,15 @@ impl ChronoApp {
                 Err(mpsc::TryRecvError::Disconnected) => None,
             };
             self.update_check = None;
+            let asked = self.manual_check == ManualCheck::Checking;
             match answer {
                 Some(latest) => {
                     self.settings.update_checked = epoch_s(SystemTime::now());
                     let offer = (latest > Version::current()).then(|| latest.to_string());
+                    if asked {
+                        // A newer release says so itself, at the top of the menu.
+                        self.manual_check = if offer.is_some() { ManualCheck::Idle } else { ManualCheck::UpToDate };
+                    }
                     // An update under way keeps its version; a newer one is
                     // offered by the check after it, if it did not go through.
                     let busy = matches!(self.update_step, UpdateStep::Downloading | UpdateStep::Installing);
@@ -38,15 +43,22 @@ impl ChronoApp {
                         self.settings.update_available = offer;
                     }
                 }
-                None => self.update_retry = Some(now + update::RETRY_AFTER),
+                None => {
+                    self.update_retry = Some(now + update::RETRY_AFTER);
+                    if asked {
+                        self.manual_check = ManualCheck::Failed;
+                    }
+                }
             }
         }
+        // One asked for from the menu goes out now, whatever the daily
+        // schedule says, and also with the daily check switched off.
+        let asked = self.manual_check == ManualCheck::Checking;
         let retry_passed = self.update_retry.is_none_or(|at| now >= at);
-        if !self.updates_allowed
-            || !self.settings.check_updates
-            || !retry_passed
-            || !update::due(self.settings.update_checked, epoch_s(SystemTime::now()))
-        {
+        let scheduled = self.settings.check_updates
+            && retry_passed
+            && update::due(self.settings.update_checked, epoch_s(SystemTime::now()));
+        if !self.updates_allowed || !(asked || scheduled) {
             return;
         }
         self.update_retry = None;
@@ -59,8 +71,37 @@ impl ChronoApp {
         });
         match spawned {
             Ok(_) => self.update_check = Some(rx),
-            Err(_) => self.update_retry = Some(now + update::RETRY_AFTER),
+            Err(_) => {
+                self.update_retry = Some(now + update::RETRY_AFTER);
+                if asked {
+                    self.manual_check = ManualCheck::Failed;
+                }
+            }
         }
+    }
+
+    /// The version item was clicked: check on the next frame, which the
+    /// click itself draws.
+    pub(super) fn request_check(&mut self) {
+        if self.updates_allowed && self.manual_check != ManualCheck::Checking {
+            self.manual_check = ManualCheck::Checking;
+        }
+    }
+
+    /// The menu item naming this version: what it says and whether it can be
+    /// clicked to check for a newer one.
+    pub(super) fn version_item(&self) -> (String, bool) {
+        let name = concat!("ChronoDesk ", env!("CARGO_PKG_VERSION"));
+        if !self.updates_allowed {
+            return (name.to_owned(), false);
+        }
+        let (status, enabled) = match self.manual_check {
+            ManualCheck::Idle => ("Check now", true),
+            ManualCheck::Checking => ("Checking…", false),
+            ManualCheck::UpToDate => ("Up to date", true),
+            ManualCheck::Failed => ("Could not check", true),
+        };
+        (format!("{name} · {status}"), enabled)
     }
 
     /// The menu's update item was clicked. The installed copy downloads the
@@ -142,6 +183,18 @@ impl ChronoApp {
             UpdateStep::Failed => (format!("Update failed: download ChronoDesk {version}…"), true),
         })
     }
+}
+
+/// A check asked for from the menu, as its item reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ManualCheck {
+    /// None asked for, or one that found a newer release, which the update
+    /// item at the top of the menu then offers.
+    Idle,
+    Checking,
+    UpToDate,
+    /// GitHub could not be reached.
+    Failed,
 }
 
 /// How far the update on offer has got.
@@ -268,6 +321,49 @@ mod tests {
         }
         assert_eq!(app.update_step, UpdateStep::Failed);
         assert!(app.update_setup.is_none());
+    }
+
+    /// What a check asked for from the menu answers with: up to date, the
+    /// offer at the top of the menu, or that GitHub could not be reached.
+    #[test]
+    fn a_check_asked_for_says_how_it_went() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        for (answer, expected, offer) in [
+            (Some(Version::current()), ManualCheck::UpToDate, None),
+            (Version::parse("1000.0.0"), ManualCheck::Idle, Some("1000.0.0")),
+            (None, ManualCheck::Failed, Some("1000.0.0")),
+        ] {
+            let (tx, rx) = mpsc::channel();
+            tx.send(answer).unwrap();
+            (app.manual_check, app.update_check) = (ManualCheck::Checking, Some(rx));
+            app.check_for_updates(&ctx, Instant::now());
+            assert_eq!(app.manual_check, expected);
+            assert_eq!(app.settings.update_available.as_deref(), offer);
+        }
+    }
+
+    /// The item always names the version; it checks only where updates are
+    /// looked for at all, and is greyed out while a check is under way.
+    #[test]
+    fn the_version_item_names_the_version_and_the_check() {
+        let ctx = egui::Context::default();
+        let mut app = ChronoApp::pinned(&ctx, Config::default(), Local::now());
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(app.version_item(), (format!("ChronoDesk {version}"), false), "a test instance never checks");
+        app.request_check();
+        assert_eq!(app.manual_check, ManualCheck::Idle, "nor can it be asked to");
+
+        app.updates_allowed = true;
+        for (state, label, enabled) in [
+            (ManualCheck::Idle, "Check now", true),
+            (ManualCheck::Checking, "Checking…", false),
+            (ManualCheck::UpToDate, "Up to date", true),
+            (ManualCheck::Failed, "Could not check", true),
+        ] {
+            app.manual_check = state;
+            assert_eq!(app.version_item(), (format!("ChronoDesk {version} · {label}"), enabled));
+        }
     }
 
     /// Test instances, like a script's, never go out to the network.

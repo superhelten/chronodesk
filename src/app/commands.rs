@@ -120,7 +120,7 @@ impl ChronoApp {
             Command::ToggleHotkeys => s.hotkeys = !s.hotkeys,
             Command::ShowWelcome => self.welcome = true,
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
-            Command::Update => {}
+            Command::Update | Command::CheckNow => {}
             Command::ToggleUpdateCheck => {
                 s.check_updates = !s.check_updates;
                 // Switched off, it offers nothing it found before either.
@@ -131,6 +131,9 @@ impl ChronoApp {
         }
         if cmd == Command::Update {
             self.start_update(ctx);
+        }
+        if cmd == Command::CheckNow {
+            self.request_check();
         }
         if counters_touched {
             self.save_counters(now);
@@ -251,6 +254,7 @@ impl ChronoApp {
             autostart: self.autostart_on.0,
             autostart_available: self.exe.is_some(),
             check_updates: s.check_updates,
+            version: self.version_item(),
             update: self.update_item(),
         }
     }

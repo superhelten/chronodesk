@@ -41,7 +41,7 @@ pub(crate) use mode::serde_by_id;
 use paint::{Card, LineShape, WidthFloor, control_rects, controls, paint_ring};
 use persist::{PLACEMENT_DEFERRALS, SavedPosition};
 use readout::Scene;
-use updates::UpdateStep;
+use updates::{ManualCheck, UpdateStep};
 use window::{native_window, restore_if_minimised, strip_window_chrome, window_position_px};
 
 /// Timed wake-ups can fire more than one OS timer tick (~15.6 ms on Windows)
@@ -117,6 +117,8 @@ pub struct ChronoApp {
     updates_allowed: bool,
     /// Where the update on offer stands; see [`UpdateStep`].
     update_step: UpdateStep,
+    /// How a check asked for from the menu went; see [`ManualCheck`].
+    manual_check: ManualCheck,
     /// A download under way: the verified setup, or why there is none.
     update_download: Option<Receiver<Result<PathBuf, update::Refused>>>,
     /// The update's setup while it runs. It ends this overlay before it is
@@ -251,6 +253,7 @@ impl ChronoApp {
             update_retry: None,
             updates_allowed: false,
             update_step: UpdateStep::Offered,
+            manual_check: ManualCheck::Idle,
             update_download: None,
             update_setup: None,
             announce_ready: None,
