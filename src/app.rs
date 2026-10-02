@@ -17,6 +17,7 @@ use crate::config::{self, Config};
 use crate::digital;
 use crate::hotkeys::Hotkeys;
 use crate::install;
+use crate::menu_theme;
 use crate::instrument::{self, Cause, Instrument, Milestone};
 use crate::layout::{DerivedLayout, Font, LayoutKey};
 use crate::matrix;
@@ -119,6 +120,8 @@ pub struct ChronoApp {
     update_step: UpdateStep,
     /// How a check asked for from the menu went; see [`ManualCheck`].
     manual_check: ManualCheck,
+    /// The menu colours last asked for, and when the setting was read.
+    menu_theme: (menu_theme::Mode, Instant),
     /// A download under way: the verified setup, or why there is none.
     update_download: Option<Receiver<Result<PathBuf, update::Refused>>>,
     /// The update's setup while it runs. It ends this overlay before it is
@@ -254,6 +257,7 @@ impl ChronoApp {
             updates_allowed: false,
             update_step: UpdateStep::Offered,
             manual_check: ManualCheck::Idle,
+            menu_theme: (menu_theme::current(), Instant::now()),
             update_download: None,
             update_setup: None,
             announce_ready: None,
@@ -604,6 +608,7 @@ impl eframe::App for ChronoApp {
         }
 
         self.recheck_autostart(now);
+        self.follow_menu_theme(now);
         self.follow_clock_changes(now);
         self.check_for_updates(&ctx, now);
         let state = self.menu_state(now);

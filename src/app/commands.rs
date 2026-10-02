@@ -8,6 +8,7 @@ use eframe::egui::{self, ViewportCommand, WindowLevel};
 use crate::alarm;
 use crate::hotkeys;
 use crate::market::Market;
+use crate::menu_theme;
 use crate::night::TimeOfDay;
 use crate::pomodoro;
 use crate::tray::{Command, MenuState};
@@ -278,6 +279,19 @@ impl ChronoApp {
             let ctx = ctx.clone();
             self.hotkeys = hotkeys::start(self.hotkey_tx.clone(), move || ctx.request_repaint());
         }
+    }
+
+    /// Follows a change to Windows' light or dark app setting, on frames that
+    /// are drawn anyway and at most as often as the startup entry is read.
+    pub(super) fn follow_menu_theme(&mut self, now: Instant) {
+        if now.duration_since(self.menu_theme.1) < AUTOSTART_RECHECK {
+            return;
+        }
+        let mode = menu_theme::current();
+        if mode != self.menu_theme.0 {
+            menu_theme::apply(mode);
+        }
+        self.menu_theme = (mode, now);
     }
 
     pub(super) fn recheck_autostart(&mut self, now: Instant) {

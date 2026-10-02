@@ -16,6 +16,7 @@ mod instrument;
 mod layout;
 mod market;
 mod matrix;
+mod menu_theme;
 mod night;
 mod placement;
 mod pomodoro;
@@ -63,6 +64,8 @@ fn main() -> eframe::Result {
     // Right after the guard, so a launch or installer that finds it held can
     // already be heard while the window is still being built.
     let inbox = config_path.as_deref().and_then(signal::Inbox::open);
+    // Before any menu exists, so the first one already opens in the right colours.
+    menu_theme::apply(menu_theme::current());
 
     let icon = icon::app_icon(64, false);
     // Loaded before the window exists so the saved position can be applied up

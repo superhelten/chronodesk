@@ -1,6 +1,6 @@
 //! The few registry calls the app needs, all under `HKEY_CURRENT_USER`: the
-//! `Run` key for "Start with Windows" and the uninstall entry the installer
-//! writes. Nothing here needs elevation.
+//! `Run` key for "Start with Windows", the uninstall entry the installer
+//! writes and the light or dark app setting. Nothing here needs elevation.
 
 #[cfg(windows)]
 mod imp {
@@ -8,7 +8,8 @@ mod imp {
 
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW,
+        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegDeleteKeyValueW,
+        RegGetValueW,
         RegSetKeyValueW,
     };
 
@@ -63,6 +64,11 @@ mod imp {
 
     pub fn read_bytes(key: &str, value: &str) -> Option<Vec<u8>> {
         read(key, value, RRF_RT_REG_BINARY)
+    }
+
+    pub fn read_dword(key: &str, value: &str) -> Option<u32> {
+        let bytes = read(key, value, RRF_RT_REG_DWORD)?;
+        Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
     }
 
     /// Creates the key if it is not there yet.
@@ -153,6 +159,10 @@ mod imp {
         None
     }
 
+    pub fn read_dword(_key: &str, _value: &str) -> Option<u32> {
+        None
+    }
+
     pub fn write_string(_key: &str, _value: &str, _text: &str) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
     }
@@ -171,3 +181,18 @@ mod imp {
 }
 
 pub use imp::*;
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dword_reads_back_and_a_missing_one_is_none() {
+        let key = format!(r"Software\ChronoDesk-registry-test-{}", std::process::id());
+        write_dword(&key, "Number", 0xC0FFEE).unwrap();
+        assert_eq!(read_dword(&key, "Number"), Some(0xC0FFEE));
+        assert_eq!(read_dword(&key, "Missing"), None);
+        assert_eq!(read_string(&key, "Number"), None, "a number is not a string");
+        delete_tree(&key).unwrap();
+    }
+}
