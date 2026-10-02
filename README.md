@@ -47,8 +47,8 @@ Once a day ChronoDesk asks GitHub whether there is a newer release, sending noth
 and version. When there is, the tray icon gets a green dot and the menu offers *Update to
 ChronoDesk x.y.z now*: one click downloads it, checks its signature and installs it, keeping your
 settings. Nothing downloads until you click, and the portable exe opens the release page instead.
-Switch the check off under *Check for updates*. The item below it shows which version you have;
-click it to check straight away.
+*Check for updates* in the menu shows which version you have and checks straight away. To turn
+the daily check off, set `check_updates: false` in the [settings file](#configuration).
 
 ## Using it
 

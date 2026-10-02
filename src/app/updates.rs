@@ -52,7 +52,7 @@ impl ChronoApp {
             }
         }
         // One asked for from the menu goes out now, whatever the daily
-        // schedule says, and also with the daily check switched off.
+        // schedule says, and also where `check_updates` is off in the file.
         let asked = self.manual_check == ManualCheck::Checking;
         let retry_passed = self.update_retry.is_none_or(|at| now >= at);
         let scheduled = self.settings.check_updates
@@ -88,20 +88,19 @@ impl ChronoApp {
         }
     }
 
-    /// The menu item naming this version: what it says and whether it can be
-    /// clicked to check for a newer one.
+    /// *Check for updates*: what it says, always with this version, and
+    /// whether it can be clicked.
     pub(super) fn version_item(&self) -> (String, bool) {
-        let name = concat!("ChronoDesk ", env!("CARGO_PKG_VERSION"));
+        let version = env!("CARGO_PKG_VERSION");
         if !self.updates_allowed {
-            return (name.to_owned(), false);
+            return (format!("ChronoDesk {version}"), false);
         }
-        let (status, enabled) = match self.manual_check {
-            ManualCheck::Idle => ("Check now", true),
-            ManualCheck::Checking => ("Checking…", false),
-            ManualCheck::UpToDate => ("Up to date", true),
-            ManualCheck::Failed => ("Could not check", true),
-        };
-        (format!("{name} · {status}"), enabled)
+        match self.manual_check {
+            ManualCheck::Idle => (format!("Check for updates (version {version})"), true),
+            ManualCheck::Checking => ("Checking for updates…".to_owned(), false),
+            ManualCheck::UpToDate => (format!("Up to date: ChronoDesk {version}"), true),
+            ManualCheck::Failed => (format!("Could not check for updates (version {version})"), true),
+        }
     }
 
     /// The menu's update item was clicked. The installed copy downloads the
@@ -218,7 +217,6 @@ mod tests {
     use super::*;
     use chrono::Local;
     use crate::config::Config;
-    use crate::tray::Command;
 
     /// Once the running version has caught up, the offer is withdrawn.
     #[test]
@@ -245,8 +243,7 @@ mod tests {
         app.tray.sync(app.menu_state(now));
         assert_eq!(app.tray.top_level(), (plain + 2, true), "the offer and a separator");
 
-        app.apply(Command::ToggleUpdateCheck, &ctx, now);
-        assert!(!app.settings.check_updates && app.settings.update_available.is_none());
+        app.settings.update_available = None;
         app.tray.sync(app.menu_state(now));
         assert_eq!(app.tray.top_level(), (plain, false));
     }
@@ -356,13 +353,13 @@ mod tests {
 
         app.updates_allowed = true;
         for (state, label, enabled) in [
-            (ManualCheck::Idle, "Check now", true),
-            (ManualCheck::Checking, "Checking…", false),
-            (ManualCheck::UpToDate, "Up to date", true),
-            (ManualCheck::Failed, "Could not check", true),
+            (ManualCheck::Idle, format!("Check for updates (version {version})"), true),
+            (ManualCheck::Checking, "Checking for updates…".to_owned(), false),
+            (ManualCheck::UpToDate, format!("Up to date: ChronoDesk {version}"), true),
+            (ManualCheck::Failed, format!("Could not check for updates (version {version})"), true),
         ] {
             app.manual_check = state;
-            assert_eq!(app.version_item(), (format!("ChronoDesk {version} · {label}"), enabled));
+            assert_eq!(app.version_item(), (label, enabled));
         }
     }
 
